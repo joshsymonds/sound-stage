@@ -1,3 +1,4 @@
+// Package ytdlp wraps yt-dlp for downloading audio and video from YouTube.
 package ytdlp
 
 import (
@@ -6,7 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
+
+// downloadTimeout is the maximum duration for a single yt-dlp download.
+const downloadTimeout = 30 * time.Minute
 
 // Downloader wraps yt-dlp invocations.
 type Downloader struct {
@@ -67,28 +72,6 @@ func (d Downloader) DownloadVideo(videoURL, destDir, filename string) error {
 	return d.run(d.buildVideoArgs(videoURL, destDir, filename))
 }
 
-// Search uses yt-dlp to search YouTube and return the first matching video URL.
-func (d Downloader) Search(query string) (string, error) {
-	args := []string{
-		fmt.Sprintf("ytsearch1:%s", query),
-		"--flat-playlist",
-		"-j",
-		"--no-warnings",
-	}
-	args = d.appendProxy(args)
-
-	//nolint:gosec // yt-dlp args are constructed internally
-	cmd := exec.CommandContext(context.Background(), "yt-dlp", args...)
-	cmd.Stderr = os.Stderr
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("yt-dlp search: %w", err)
-	}
-
-	return extractURLFromJSON(out)
-}
-
 func (d Downloader) appendProxy(args []string) []string {
 	if d.Proxy != "" {
 		return append(args, "--proxy", d.Proxy)
@@ -97,8 +80,11 @@ func (d Downloader) appendProxy(args []string) []string {
 }
 
 func (d Downloader) run(args []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
+	defer cancel()
+
 	//nolint:gosec // yt-dlp args are constructed internally
-	cmd := exec.CommandContext(context.Background(), "yt-dlp", args...)
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

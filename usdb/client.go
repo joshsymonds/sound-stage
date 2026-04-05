@@ -12,9 +12,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const baseURL = "https://usdb.animux.de/"
+
+// httpTimeout is the timeout for all USDB HTTP requests.
+const httpTimeout = 30 * time.Second
 
 // Client is an authenticated USDB HTTP client.
 type Client struct {
@@ -52,7 +56,10 @@ func NewClient(username, password string) (*Client, error) {
 	}
 
 	client := &Client{
-		http: &http.Client{Jar: jar},
+		http: &http.Client{
+			Jar:     jar,
+			Timeout: httpTimeout,
+		},
 	}
 
 	data := url.Values{

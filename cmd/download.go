@@ -42,6 +42,10 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := validateProxy(proxy); err != nil {
+		return err
+	}
+
 	ids, err := collectIDs(args, downloadFrom)
 	if err != nil {
 		return err
@@ -58,8 +62,13 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	dl := ytdlp.Downloader{Proxy: proxy}
 
+	downloaded, err := archive.LoadDownloaded(outputDir)
+	if err != nil {
+		return fmt.Errorf("loading download archive: %w", err)
+	}
+
 	for _, idStr := range ids {
-		if err := downloadSong(client, dl, idStr); err != nil {
+		if err := downloadSong(client, dl, idStr, downloaded); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "error downloading %s: %v\n", idStr, err)
 			continue
 		}
@@ -96,14 +105,14 @@ func collectIDs(args []string, fromFile string) ([]string, error) {
 	return ids, nil
 }
 
-func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string) error {
+func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string, downloaded map[int]struct{}) error {
 	var id int
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
 		return fmt.Errorf("invalid song ID %q", idStr)
 	}
 
 	// Check download archive
-	if archive.IsDownloaded(outputDir, id) {
+	if _, ok := downloaded[id]; ok {
 		fmt.Printf("Skipping song #%d (already downloaded)\n", id)
 		return nil
 	}
@@ -186,4 +195,21 @@ func sanitizePath(input string) string {
 		"|", "",
 	)
 	return strings.TrimSpace(replacer.Replace(input))
+}
+
+// validateProxy checks that the proxy URL, if set, uses a supported scheme.
+func validateProxy(proxyURL string) error {
+	if proxyURL == "" {
+		return nil
+	}
+	validSchemes := []string{"socks5://", "socks4://", "http://", "https://"}
+	for _, scheme := range validSchemes {
+		if strings.HasPrefix(proxyURL, scheme) {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"unsupported proxy scheme in %q (must start with socks5://, socks4://, http://, or https://)",
+		proxyURL,
+	)
 }

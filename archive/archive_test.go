@@ -75,3 +75,40 @@ func TestMarkDownloaded_Append(t *testing.T) {
 		t.Errorf("archive contents = %q, want %q", string(data), "1\n2\n")
 	}
 }
+
+func TestLoadDownloaded_NoArchive(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ids, err := LoadDownloaded(dir)
+	if err != nil {
+		t.Fatalf("LoadDownloaded: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected empty set, got %d entries", len(ids))
+	}
+}
+
+func TestLoadDownloaded_WithEntries(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	for _, id := range []int{10, 20, 30} {
+		if err := MarkDownloaded(dir, id); err != nil {
+			t.Fatalf("MarkDownloaded(%d): %v", id, err)
+		}
+	}
+
+	ids, err := LoadDownloaded(dir)
+	if err != nil {
+		t.Fatalf("LoadDownloaded: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(ids))
+	}
+	for _, id := range []int{10, 20, 30} {
+		if _, ok := ids[id]; !ok {
+			t.Errorf("expected %d in set", id)
+		}
+	}
+}

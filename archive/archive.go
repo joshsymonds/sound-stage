@@ -3,7 +3,6 @@ package archive
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,8 +12,11 @@ import (
 
 const archiveFile = ".downloaded.txt"
 
-// ErrArchiveNotFound is returned when no download archive exists yet.
-var ErrArchiveNotFound = errors.New("download archive not found")
+// LoadDownloaded reads the archive and returns the set of all downloaded song IDs.
+// Returns an empty set if the archive does not exist yet.
+func LoadDownloaded(outputDir string) (map[int]struct{}, error) {
+	return readArchive(outputDir)
+}
 
 // IsDownloaded checks if a song ID has already been downloaded.
 func IsDownloaded(outputDir string, songID int) bool {
@@ -53,7 +55,7 @@ func readArchive(outputDir string) (map[int]struct{}, error) {
 	file, err := os.Open(archivePath) //nolint:gosec // path is from our config
 	if err != nil {
 		if os.IsNotExist(err) {
-			return make(map[int]struct{}), ErrArchiveNotFound
+			return make(map[int]struct{}), nil
 		}
 		return nil, fmt.Errorf("opening archive: %w", err)
 	}

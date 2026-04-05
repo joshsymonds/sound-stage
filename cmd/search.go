@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 
@@ -24,6 +25,9 @@ var (
 	searchLimit  int
 	searchJSON   bool
 )
+
+// osStdout is the writer used for JSON and table output. Tests can replace it.
+var osStdout io.Writer = os.Stdout
 
 func init() {
 	searchCmd.Flags().StringVarP(&searchArtist, "artist", "a", "", "filter by artist")
@@ -60,7 +64,7 @@ func runSearch(_ *cobra.Command, _ []string) error {
 }
 
 func outputJSON(results []usdb.Song) error {
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(osStdout)
 	enc.SetIndent("", "  ")
 
 	if err := enc.Encode(results); err != nil {
@@ -76,7 +80,7 @@ func outputTable(results []usdb.Song) error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(osStdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tARTIST\tTITLE\tLANGUAGE")
 
 	for _, s := range results {

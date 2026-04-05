@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// youtubeIDValidRegex matches a valid 11-character YouTube video ID.
+var youtubeIDValidRegex = regexp.MustCompile(`^[0-9A-Za-z_-]{11}$`)
 
 // PreparedSong holds the parsed song info ready for media download.
 type PreparedSong struct {
@@ -51,10 +55,13 @@ func PrepareSong(rawTxt string, details *SongDetails, songDir string) (*Prepared
 		return nil, fmt.Errorf("writing song txt: %w", err)
 	}
 
-	// Find best YouTube URL
+	// Find best YouTube URL, skipping invalid IDs
 	var youtubeURL string
-	if len(details.YouTubeIDs) > 0 {
-		youtubeURL = "https://www.youtube.com/watch?v=" + details.YouTubeIDs[0]
+	for _, id := range details.YouTubeIDs {
+		if youtubeIDValidRegex.MatchString(id) {
+			youtubeURL = "https://www.youtube.com/watch?v=" + id
+			break
+		}
 	}
 
 	return &PreparedSong{
