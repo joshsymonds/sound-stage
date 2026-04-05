@@ -30,11 +30,11 @@ func IsDownloaded(outputDir string, songID int) bool {
 func MarkDownloaded(outputDir string, songID int) error {
 	archivePath := filepath.Join(outputDir, archiveFile)
 
-	file, err := os.OpenFile(
+	file, err := os.OpenFile( //nolint:gosec // path constructed from our output dir config
 		archivePath,
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
 		0o600,
-	) //nolint:gosec // path constructed from our output dir
+	)
 	if err != nil {
 		return fmt.Errorf("opening archive: %w", err)
 	}
