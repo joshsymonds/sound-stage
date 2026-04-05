@@ -16,5 +16,8 @@ sound-stage
 .env.local
 .envrc.local
 
+# Reference repos
+.reference/
+
 # OS
 .DS_Store
