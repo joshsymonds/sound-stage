@@ -13,13 +13,12 @@ type Downloader struct {
 	Proxy string // SOCKS5 proxy URL, e.g. "socks5://10.64.0.1:1080"
 }
 
-// DownloadAudio extracts audio as MP3 from a YouTube URL.
+// DownloadAudio downloads audio as Opus/WebM from a YouTube URL (YouTube's native format).
 func (d Downloader) DownloadAudio(videoURL, destDir, filename string) error {
 	outPath := filepath.Join(destDir, filename)
 	args := []string{
-		"-x",
-		"--audio-format", "mp3",
-		"--audio-quality", "0",
+		"-f", "bestaudio[acodec=opus]/bestaudio",
+		"--merge-output-format", "webm",
 		"-o", outPath,
 		"--no-playlist",
 		"--no-warnings",
@@ -29,12 +28,12 @@ func (d Downloader) DownloadAudio(videoURL, destDir, filename string) error {
 	return d.run(args)
 }
 
-// DownloadVideo downloads a video as MP4 from a YouTube URL.
+// DownloadVideo downloads video as VP9/Opus in WebM from a YouTube URL (YouTube's native format).
 func (d Downloader) DownloadVideo(videoURL, destDir, filename string) error {
 	outPath := filepath.Join(destDir, filename)
 	args := []string{
-		"-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-		"--remux-video", "mp4",
+		"-f", "bestvideo[vcodec^=vp9]+bestaudio[acodec=opus]/bestvideo+bestaudio/best",
+		"--merge-output-format", "webm",
 		"-o", outPath,
 		"--no-playlist",
 		"--no-warnings",

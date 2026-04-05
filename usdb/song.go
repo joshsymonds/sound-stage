@@ -36,8 +36,8 @@ func PrepareSong(rawTxt string, details *SongDetails, songDir string) (*Prepared
 		title = details.Title
 	}
 
-	audioFile := "audio.mp3"
-	videoFile := "video.mp4"
+	audioFile := "audio.webm"
+	videoFile := "video.webm"
 
 	// Rewrite media headers to point to local files
 	headers = setHeader(headers, "MP3", audioFile)

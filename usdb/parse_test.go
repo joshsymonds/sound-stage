@@ -193,8 +193,8 @@ func TestSetHeader(t *testing.T) {
 	assertHeader(t, headers, "TITLE", "New")
 
 	// Add new.
-	headers = setHeader(headers, "VIDEO", "video.mp4")
-	assertHeader(t, headers, "VIDEO", "video.mp4")
+	headers = setHeader(headers, "VIDEO", "video.webm")
+	assertHeader(t, headers, "VIDEO", "video.webm")
 }
 
 func TestPrepareSong(t *testing.T) {
@@ -218,10 +218,10 @@ func TestPrepareSong(t *testing.T) {
 	if song.YouTubeURL != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
 		t.Errorf("YouTubeURL = %q", song.YouTubeURL)
 	}
-	if song.AudioFile != "audio.mp3" {
+	if song.AudioFile != "audio.webm" {
 		t.Errorf("AudioFile = %q", song.AudioFile)
 	}
-	if song.VideoFile != "video.mp4" {
+	if song.VideoFile != "video.webm" {
 		t.Errorf("VideoFile = %q", song.VideoFile)
 	}
 
@@ -234,8 +234,8 @@ func TestPrepareSong(t *testing.T) {
 
 	// Should have corrected headers.
 	headers, _ := parseTxt(content)
-	assertHeader(t, headers, "MP3", "audio.mp3")
-	assertHeader(t, headers, "VIDEO", "video.mp4")
+	assertHeader(t, headers, "MP3", "audio.webm")
+	assertHeader(t, headers, "VIDEO", "video.webm")
 	assertHeader(t, headers, "COVER", "cover.jpg")
 }
 
