@@ -23,10 +23,10 @@ type Client struct {
 
 // Song represents a search result from USDB.
 type Song struct {
-	ID       int
-	Artist   string
-	Title    string
-	Language string
+	ID       int    `json:"id"`
+	Artist   string `json:"artist"`
+	Title    string `json:"title"`
+	Language string `json:"language"`
 }
 
 // SongDetails contains metadata from a song's detail page.
