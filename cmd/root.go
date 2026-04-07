@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/joshsymonds/sound-stage/ytdlp"
 )
 
 var (
@@ -13,6 +15,7 @@ var (
 	proxy     string
 	username  string
 	password  string
+	maxHeight int
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +39,10 @@ func init() {
 		StringVar(&proxy, "proxy", envOrDefault("SOUND_STAGE_PROXY", ""), "SOCKS5 proxy for yt-dlp (e.g. socks5://10.64.0.1:1080)")
 	rootCmd.PersistentFlags().StringVarP(&username, "username", "u", os.Getenv("USDB_USERNAME"), "USDB username")
 	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", os.Getenv("USDB_PASSWORD"), "USDB password")
+	rootCmd.PersistentFlags().IntVar(
+		&maxHeight, "max-height", ytdlp.DefaultMaxHeight,
+		"max video resolution height in pixels (e.g. 720, 1080, 2160)",
+	)
 }
 
 func defaultOutputDir() string {

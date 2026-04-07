@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // songRowRegex matches song rows in the USDB search results HTML.
@@ -44,16 +45,53 @@ func parseSearchResults(html string) []Song {
 	return songs
 }
 
+// RateLimitError is returned when USDB asks us to wait before downloading.
+type RateLimitError struct {
+	Wait time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("rate limited by USDB (wait %s)", e.Wait)
+}
+
+// rateLimitWaitRegex extracts the countdown seconds from the rate-limit page JavaScript.
+// The page sets `time = N;` where N is the number of seconds to wait.
+var rateLimitWaitRegex = regexp.MustCompile(`(?m)\btime\s*=\s*(\d+)\s*;`)
+
 // textareaRegex extracts content from a <textarea> tag.
 var textareaRegex = regexp.MustCompile(`(?s)<textarea[^>]*>(.*?)</textarea>`)
 
 // extractTextarea pulls the UltraStar txt content from a USDB gettxt response.
+// Returns a *RateLimitError if the response is a rate-limit countdown page.
 func extractTextarea(html string) (string, error) {
 	match := textareaRegex.FindStringSubmatch(html)
 	if match == nil {
+		if wait, ok := parseRateLimit(html); ok {
+			return "", &RateLimitError{Wait: wait}
+		}
 		return "", fmt.Errorf("no textarea found in response (song may not exist)")
 	}
 	return strings.TrimSpace(match[1]), nil
+}
+
+// defaultRateLimitWait is used when we detect a rate-limit page but can't parse the wait time.
+const defaultRateLimitWait = 30 * time.Second
+
+// parseRateLimit checks if the HTML is a USDB rate-limit page and returns the wait duration.
+func parseRateLimit(html string) (time.Duration, bool) {
+	if !strings.Contains(html, "Please wait") {
+		return 0, false
+	}
+	match := rateLimitWaitRegex.FindStringSubmatch(html)
+	if match == nil {
+		// We see "Please wait" but can't parse the countdown — use a safe default.
+		return defaultRateLimitWait, true
+	}
+	seconds, err := strconv.Atoi(match[1])
+	if err != nil || seconds <= 0 {
+		return defaultRateLimitWait, true
+	}
+	return time.Duration(seconds) * time.Second, true
 }
 
 // artistTitleRegex extracts artist and title from the detail page header.

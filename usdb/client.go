@@ -3,6 +3,7 @@ package usdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,8 @@ const httpTimeout = 30 * time.Second
 
 // Client is an authenticated USDB HTTP client.
 type Client struct {
-	http *http.Client
+	http    *http.Client
+	baseURL string
 }
 
 // Song represents a search result from USDB.
@@ -43,9 +45,10 @@ type SongDetails struct {
 
 // SearchParams controls a USDB song search.
 type SearchParams struct {
-	Artist string
-	Title  string
-	Limit  int
+	Artist  string
+	Title   string
+	Edition string
+	Limit   int
 }
 
 // NewClient logs in to USDB and returns an authenticated client.
@@ -60,6 +63,7 @@ func NewClient(username, password string) (*Client, error) {
 			Jar:     jar,
 			Timeout: httpTimeout,
 		},
+		baseURL: baseURL,
 	}
 
 	data := url.Values{
@@ -71,7 +75,7 @@ func NewClient(username, password string) (*Client, error) {
 	req, err := http.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		baseURL,
+		client.baseURL,
 		strings.NewReader(data.Encode()),
 	)
 	if err != nil {
@@ -117,11 +121,14 @@ func (c *Client) Search(params SearchParams) ([]Song, error) {
 	if params.Title != "" {
 		data.Set("title", params.Title)
 	}
+	if params.Edition != "" {
+		data.Set("edition", params.Edition)
+	}
 
 	req, err := http.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		baseURL+"?link=list",
+		c.baseURL+"?link=list",
 		strings.NewReader(data.Encode()),
 	)
 	if err != nil {
@@ -144,33 +151,69 @@ func (c *Client) Search(params SearchParams) ([]Song, error) {
 	return parseSearchResults(string(body)), nil
 }
 
+// maxTxtRetries is the maximum number of times to retry a rate-limited gettxt request.
+const maxTxtRetries = 5
+
 // GetSongTxt downloads the raw UltraStar txt for a song.
+// If USDB returns a rate-limit page, it waits and retries automatically.
 func (c *Client) GetSongTxt(songID int) (string, error) {
-	data := url.Values{"wd": {"1"}}
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		fmt.Sprintf("%s?link=gettxt&id=%d", baseURL, songID),
-		strings.NewReader(data.Encode()),
-	)
-	if err != nil {
-		return "", fmt.Errorf("creating gettxt request: %w", err)
+	return c.getSongTxt(songID, func(d time.Duration) {
+		timer := time.NewTimer(d)
+		<-timer.C
+	})
+}
+
+// getSongTxt is the internal implementation that accepts a sleep function for testing.
+func (c *Client) getSongTxt(songID int, sleepFn func(time.Duration)) (string, error) {
+	txtURL := fmt.Sprintf("%s?link=gettxt&id=%d", c.baseURL, songID)
+
+	for attempt := range maxTxtRetries {
+		data := url.Values{"wd": {"1"}}
+		req, err := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			txtURL,
+			strings.NewReader(data.Encode()),
+		)
+		if err != nil {
+			return "", fmt.Errorf("creating gettxt request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("gettxt request: %w", err)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return "", fmt.Errorf("reading txt response: %w", err)
+		}
+
+		txt, err := extractTextarea(string(body))
+		if err == nil {
+			return txt, nil
+		}
+
+		var rlErr *RateLimitError
+		if !errors.As(err, &rlErr) {
+			return "", fmt.Errorf("fetching song txt (response len=%d): %w", len(body), err)
+		}
+
+		if attempt == maxTxtRetries-1 {
+			return "", fmt.Errorf("fetching song txt: still rate limited after %d retries", maxTxtRetries)
+		}
+
+		// Add 1s buffer to the server's requested wait time.
+		wait := rlErr.Wait + time.Second
+		fmt.Fprintf(os.Stderr, "  Rate limited, waiting %s before retry...\n", wait)
+		sleepFn(wait)
 	}
 
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("gettxt request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading txt response: %w", err)
-	}
-
-	return extractTextarea(string(body))
+	// Unreachable, but satisfies the compiler.
+	return "", fmt.Errorf("fetching song txt: exhausted retries")
 }
 
 // GetSongDetails fetches the detail page and extracts metadata + YouTube IDs from comments.
@@ -178,7 +221,7 @@ func (c *Client) GetSongDetails(songID int) (*SongDetails, error) {
 	req, err := http.NewRequestWithContext(
 		context.Background(),
 		http.MethodGet,
-		fmt.Sprintf("%s?link=detail&id=%d", baseURL, songID),
+		fmt.Sprintf("%s?link=detail&id=%d", c.baseURL, songID),
 		nil,
 	)
 	if err != nil {
@@ -201,7 +244,7 @@ func (c *Client) GetSongDetails(songID int) (*SongDetails, error) {
 
 // DownloadCover saves the cover image for a song.
 func (c *Client) DownloadCover(songID int, destDir string) error {
-	coverURL := fmt.Sprintf("%sdata/cover/%d.jpg", baseURL, songID)
+	coverURL := fmt.Sprintf("%sdata/cover/%d.jpg", c.baseURL, songID)
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, coverURL, nil)
 	if err != nil {

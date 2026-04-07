@@ -50,6 +50,14 @@ strip-video-audio dir:
     done < <(find "{{dir}}" -name "video.webm")
     echo "Done. Stripped audio from $count video(s)."
 
+# Separate vocals from instrumentals (venv auto-created by devenv)
+delyric *ARGS:
+    python3 delyric.py {{ARGS}}
+
+# Preview what delyric would process
+delyric-dry-run:
+    python3 delyric.py --dry-run
+
 # Run any sound-stage subcommand
 run *ARGS:
     go run . {{ARGS}}

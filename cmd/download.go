@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 
@@ -60,7 +61,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("login failed: %w", err)
 	}
 
-	dl := ytdlp.Downloader{Proxy: proxy}
+	dl := ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight}
 
 	downloaded, err := archive.LoadDownloaded(outputDir)
 	if err != nil {
@@ -126,7 +127,7 @@ func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string, downlo
 
 	txt, err := client.GetSongTxt(id)
 	if err != nil {
-		return fmt.Errorf("fetching song txt: %w", err)
+		return fmt.Errorf("getting song txt: %w", err)
 	}
 
 	// Build output directory
@@ -155,18 +156,34 @@ func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string, downlo
 		return markAndFinish(id)
 	}
 
+	var audioErr, videoErr error
+	var wg sync.WaitGroup
+
 	if downloadAudio {
+		wg.Add(1)
 		fmt.Printf("  Downloading audio...\n")
-		if err := dl.DownloadAudio(song.YouTubeURL, songDir, song.AudioFile); err != nil {
-			return fmt.Errorf("downloading audio: %w", err)
-		}
+		go func() {
+			defer wg.Done()
+			audioErr = dl.DownloadAudio(song.YouTubeURL, songDir, song.AudioFile)
+		}()
 	}
 
 	if downloadVideo {
+		wg.Add(1)
 		fmt.Printf("  Downloading video...\n")
-		if err := dl.DownloadVideo(song.YouTubeURL, songDir, song.VideoFile); err != nil {
-			fmt.Printf("  Warning: video download failed: %v\n", err)
-		}
+		go func() {
+			defer wg.Done()
+			videoErr = dl.DownloadVideo(song.YouTubeURL, songDir, song.VideoFile)
+		}()
+	}
+
+	wg.Wait()
+
+	if audioErr != nil {
+		return fmt.Errorf("downloading audio: %w", audioErr)
+	}
+	if videoErr != nil {
+		fmt.Printf("  Warning: video download failed: %v\n", videoErr)
 	}
 
 	return markAndFinish(id)

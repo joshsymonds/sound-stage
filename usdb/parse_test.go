@@ -1,9 +1,11 @@
 package usdb
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func readFixture(t *testing.T, name string) string {
@@ -76,6 +78,24 @@ func TestExtractTextarea_NoTextarea(t *testing.T) {
 	_, err := extractTextarea("<html><body>no textarea here</body></html>")
 	if err == nil {
 		t.Error("expected error for missing textarea, got nil")
+	}
+}
+
+func TestExtractTextarea_RateLimit(t *testing.T) {
+	t.Parallel()
+	html := readFixture(t, "gettxt_ratelimit.html")
+
+	_, err := extractTextarea(html)
+	if err == nil {
+		t.Fatal("expected error for rate-limited response, got nil")
+	}
+
+	var rlErr *RateLimitError
+	if !errors.As(err, &rlErr) {
+		t.Fatalf("expected *RateLimitError, got %T: %v", err, err)
+	}
+	if rlErr.Wait != 24*time.Second {
+		t.Errorf("Wait = %v, want 24s", rlErr.Wait)
 	}
 }
 

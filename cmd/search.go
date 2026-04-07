@@ -20,10 +20,11 @@ var searchCmd = &cobra.Command{
 }
 
 var (
-	searchArtist string
-	searchTitle  string
-	searchLimit  int
-	searchJSON   bool
+	searchArtist  string
+	searchTitle   string
+	searchEdition string
+	searchLimit   int
+	searchJSON    bool
 )
 
 // osStdout is the writer used for JSON and table output. Tests can replace it.
@@ -32,6 +33,9 @@ var osStdout io.Writer = os.Stdout
 func init() {
 	searchCmd.Flags().StringVarP(&searchArtist, "artist", "a", "", "filter by artist")
 	searchCmd.Flags().StringVarP(&searchTitle, "title", "t", "", "filter by title")
+	searchCmd.Flags().StringVarP(
+		&searchEdition, "edition", "e", "", "filter by edition",
+	)
 	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 25, "max results to show")
 	searchCmd.Flags().BoolVar(&searchJSON, "json", false, "output results as JSON")
 	rootCmd.AddCommand(searchCmd)
@@ -48,9 +52,10 @@ func runSearch(_ *cobra.Command, _ []string) error {
 	}
 
 	results, err := client.Search(usdb.SearchParams{
-		Artist: searchArtist,
-		Title:  searchTitle,
-		Limit:  searchLimit,
+		Artist:  searchArtist,
+		Title:   searchTitle,
+		Edition: searchEdition,
+		Limit:   searchLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("search failed: %w", err)
