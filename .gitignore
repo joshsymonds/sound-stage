@@ -19,5 +19,9 @@ sound-stage
 # Reference repos
 .reference/
 
+# Python
+__pycache__/
+.pytest_cache/
+
 # OS
 .DS_Store
