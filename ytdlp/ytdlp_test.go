@@ -4,26 +4,22 @@ import (
 	"testing"
 )
 
-func TestBuildAudioArgs_ContainsRateLimiting(t *testing.T) {
+func TestBuildAudioArgs_ContainsRetryConfig(t *testing.T) {
 	t.Parallel()
 	dl := Downloader{}
 	args := dl.buildAudioArgs("https://youtube.com/watch?v=test", "/tmp", "audio.webm")
 
-	assertContains(t, args, "--sleep-interval")
-	assertContains(t, args, "--max-sleep-interval")
-	assertContains(t, args, "--limit-rate")
 	assertContains(t, args, "--retry-sleep")
+	assertContains(t, args, "--retries")
 }
 
-func TestBuildVideoArgs_ContainsRateLimiting(t *testing.T) {
+func TestBuildVideoArgs_ContainsRetryConfig(t *testing.T) {
 	t.Parallel()
 	dl := Downloader{}
 	args := dl.buildVideoArgs("https://youtube.com/watch?v=test", "/tmp", "video.webm")
 
-	assertContains(t, args, "--sleep-interval")
-	assertContains(t, args, "--max-sleep-interval")
-	assertContains(t, args, "--limit-rate")
 	assertContains(t, args, "--retry-sleep")
+	assertContains(t, args, "--retries")
 }
 
 func TestBuildVideoArgs_ContainsVP9Format(t *testing.T) {
@@ -32,8 +28,21 @@ func TestBuildVideoArgs_ContainsVP9Format(t *testing.T) {
 	args := dl.buildVideoArgs("https://youtube.com/watch?v=test", "/tmp", "video.webm")
 
 	assertContains(t, args, "-f")
-	assertContainsValue(t, args, "-f", "bestvideo[vcodec^=vp9]+bestaudio[acodec=opus]/bestvideo+bestaudio/best")
-	assertContains(t, args, "--merge-output-format")
+	assertContainsValue(
+		t, args, "-f",
+		"bestvideo[vcodec^=vp9][height<=1080]/bestvideo[height<=1080]",
+	)
+}
+
+func TestBuildVideoArgs_CustomMaxHeight(t *testing.T) {
+	t.Parallel()
+	dl := Downloader{MaxHeight: 720}
+	args := dl.buildVideoArgs("https://youtube.com/watch?v=test", "/tmp", "video.webm")
+
+	assertContainsValue(
+		t, args, "-f",
+		"bestvideo[vcodec^=vp9][height<=720]/bestvideo[height<=720]",
+	)
 }
 
 func TestBuildAudioArgs_ContainsOpusFormat(t *testing.T) {

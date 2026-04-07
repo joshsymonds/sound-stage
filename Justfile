@@ -35,6 +35,21 @@ search *ARGS:
 download *ARGS:
     go run . download {{ARGS}}
 
+# Strip audio tracks from all video.webm files in the output directory
+strip-video-audio dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    count=0
+    while IFS= read -r f; do
+      if ffprobe "$f" 2>&1 | grep -q "Audio:"; then
+        tmp="${f%.webm}_noaudio.webm"
+        ffmpeg -y -i "$f" -an -c:v copy "$tmp" 2>/dev/null && mv "$tmp" "$f"
+        echo "Stripped: $f"
+        count=$((count + 1))
+      fi
+    done < <(find "{{dir}}" -name "video.webm")
+    echo "Done. Stripped audio from $count video(s)."
+
 # Run any sound-stage subcommand
 run *ARGS:
     go run . {{ARGS}}

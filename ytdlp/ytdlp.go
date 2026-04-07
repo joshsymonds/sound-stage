@@ -13,20 +13,20 @@ import (
 // downloadTimeout is the maximum duration for a single yt-dlp download.
 const downloadTimeout = 30 * time.Minute
 
+// DefaultMaxHeight is the default video resolution cap (1080p).
+const DefaultMaxHeight = 1080
+
 // Downloader wraps yt-dlp invocations.
 type Downloader struct {
-	Proxy string // SOCKS5 proxy URL, e.g. "socks5://10.64.0.1:1080"
+	Proxy     string // SOCKS5 proxy URL, e.g. "socks5://10.64.0.1:1080"
+	MaxHeight int    // Max video height in pixels (0 uses DefaultMaxHeight)
 }
 
-// rateLimitArgs returns yt-dlp flags for responsible rate limiting.
-func rateLimitArgs() []string {
+// retryArgs returns yt-dlp flags for retry behavior on transient errors.
+func retryArgs() []string {
 	return []string{
-		"--sleep-interval", "10",
-		"--max-sleep-interval", "30",
-		"--sleep-requests", "1.5",
-		"--limit-rate", "5M",
-		"--retry-sleep", "http:30",
-		"--retries", "10",
+		"--retry-sleep", "http:10",
+		"--retries", "5",
 	}
 }
 
@@ -40,23 +40,31 @@ func (d Downloader) buildAudioArgs(videoURL, destDir, filename string) []string 
 		"--no-playlist",
 		"--no-warnings",
 	}
-	args = append(args, rateLimitArgs()...)
+	args = append(args, retryArgs()...)
 	args = d.appendProxy(args)
 	args = append(args, "--", videoURL)
 	return args
 }
 
-// buildVideoArgs constructs yt-dlp arguments for video download (VP9/Opus WebM).
+// buildVideoArgs constructs yt-dlp arguments for video-only download (VP9 WebM, no audio track).
 func (d Downloader) buildVideoArgs(videoURL, destDir, filename string) []string {
+	maxH := d.MaxHeight
+	if maxH <= 0 {
+		maxH = DefaultMaxHeight
+	}
+	formatSpec := fmt.Sprintf(
+		"bestvideo[vcodec^=vp9][height<=%d]/bestvideo[height<=%d]",
+		maxH, maxH,
+	)
 	outPath := filepath.Join(destDir, filename)
 	args := []string{
-		"-f", "bestvideo[vcodec^=vp9]+bestaudio[acodec=opus]/bestvideo+bestaudio/best",
+		"-f", formatSpec,
 		"--merge-output-format", "webm",
 		"-o", outPath,
 		"--no-playlist",
 		"--no-warnings",
 	}
-	args = append(args, rateLimitArgs()...)
+	args = append(args, retryArgs()...)
 	args = d.appendProxy(args)
 	args = append(args, "--", videoURL)
 	return args
@@ -67,7 +75,7 @@ func (d Downloader) DownloadAudio(videoURL, destDir, filename string) error {
 	return d.run(d.buildAudioArgs(videoURL, destDir, filename))
 }
 
-// DownloadVideo downloads video as VP9/Opus in WebM from a YouTube URL (YouTube's native format).
+// DownloadVideo downloads video-only as VP9 WebM from a YouTube URL (no audio track).
 func (d Downloader) DownloadVideo(videoURL, destDir, filename string) error {
 	return d.run(d.buildVideoArgs(videoURL, destDir, filename))
 }
