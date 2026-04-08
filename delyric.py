@@ -17,7 +17,7 @@ import click
 from tqdm import tqdm
 
 # Model constants — update these when better checkpoints are released
-PRIMARY_MODEL = "mel_band_roformer_viperx_1143.ckpt"
+PRIMARY_MODEL = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
 ENSEMBLE_MODEL = "htdemucs_ft.yaml"
 ENSEMBLE_ALGORITHM = "max_fft"
 

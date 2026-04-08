@@ -22,6 +22,10 @@
     pkgs.yt-dlp
     pkgs.ffmpeg
 
+    # Native libs needed by pip-installed numpy/torch (audio-separator[gpu])
+    pkgs.stdenv.cc.cc.lib
+    pkgs.zlib
+
     # Build tooling
     pkgs.just
   ];
@@ -31,6 +35,9 @@
     export GOPATH="$DEVENV_STATE/go"
     export GOMODCACHE="$GOPATH/pkg/mod"
     export PATH="$GOPATH/bin:$PATH"
+
+    # Native libs for pip-installed wheels (numpy, torch, etc.)
+    export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.zlib}/lib:/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
     if ! command -v goimports &>/dev/null; then
       go install golang.org/x/tools/cmd/goimports@latest
