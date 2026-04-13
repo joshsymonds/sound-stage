@@ -11,11 +11,14 @@
     pkgs.golangci-lint
     pkgs.delve
 
-    # Python (for delyric.py vocal separation pipeline)
+    # Python (for delyric.py vocal separation pipeline + FastAPI worker)
     (pkgs.python3.withPackages (ps: [
       ps.click
       ps.tqdm
       ps.pytest
+      ps.fastapi
+      ps.uvicorn
+      ps.httpx
     ]))
 
     # Web frontend (Svelte 5 + SvelteKit + Storybook)

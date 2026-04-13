@@ -7,6 +7,7 @@ set dotenv-filename := ".env.local"
 # Run all tests
 test:
     go test -race $(go list ./... | grep -v /web/)
+    pytest -q
 
 # Run linter
 lint:
@@ -26,6 +27,7 @@ check: lint test
 # Run tests with verbose output
 test-v:
     go test -race -v $(go list ./... | grep -v /web/)
+    pytest -v
 
 # Search USDB for songs (pass any flags after --)
 search *ARGS:
