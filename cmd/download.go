@@ -131,7 +131,7 @@ func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string, downlo
 	}
 
 	// Build output directory
-	dirName := sanitizePath(fmt.Sprintf("%s - %s", details.Artist, details.Title))
+	dirName := usdb.SanitizePath(fmt.Sprintf("%s - %s", details.Artist, details.Title))
 	songDir := filepath.Join(outputDir, dirName)
 
 	fmt.Printf("Downloading: %s - %s → %s\n", details.Artist, details.Title, songDir)
@@ -197,21 +197,6 @@ func markAndFinish(songID int) error {
 	fmt.Printf("  Done!\n")
 
 	return nil
-}
-
-func sanitizePath(input string) string {
-	replacer := strings.NewReplacer(
-		"/", "-",
-		"\\", "-",
-		":", "-",
-		"*", "",
-		"?", "",
-		"\"", "",
-		"<", "",
-		">", "",
-		"|", "",
-	)
-	return strings.TrimSpace(replacer.Replace(usdb.NormalizeText(input)))
 }
 
 // validateProxy checks that the proxy URL, if set, uses a supported scheme.

@@ -2,10 +2,10 @@
   import { defineMeta } from "@storybook/addon-svelte-csf";
 
   import AppShell from "./AppShell.svelte";
+  import Button from "./Button.svelte";
   import NowPlaying from "./NowPlaying.svelte";
   import QueueItem from "./QueueItem.svelte";
   import SongCard from "./SongCard.svelte";
-  import Button from "./Button.svelte";
 
   const { Story } = defineMeta({
     title: "Layouts/AppShell",

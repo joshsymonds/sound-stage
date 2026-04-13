@@ -9,6 +9,7 @@ import (
 )
 
 const proxyTimeout = 5 * time.Second
+const maxProxyResponse = 10 << 20 // 10 MB
 
 // PlaybackProxyHandler creates a handler that proxies POST requests to the Deck's Pascal API.
 func PlaybackProxyHandler(deckURL, endpoint string) http.Handler {
@@ -37,7 +38,7 @@ func PlaybackProxyHandler(deckURL, endpoint string) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxProxyResponse))
 	})
 }
 
@@ -71,6 +72,6 @@ func NowPlayingProxyHandler(deckURL string) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxProxyResponse))
 	})
 }

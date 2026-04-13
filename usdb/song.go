@@ -136,6 +136,23 @@ func formatTxt(headers []header, body string) string {
 	return b.String()
 }
 
+// SanitizePath removes characters that are invalid in file/directory names
+// and normalizes Unicode text for safe filesystem paths.
+func SanitizePath(input string) string {
+	replacer := strings.NewReplacer(
+		"/", "-",
+		"\\", "-",
+		":", "-",
+		"*", "",
+		"?", "",
+		"\"", "",
+		"<", "",
+		">", "",
+		"|", "",
+	)
+	return strings.TrimSpace(replacer.Replace(NormalizeText(input)))
+}
+
 // NormalizeText replaces Unicode smart quotes and other typographic characters
 // with their ASCII equivalents, and decodes HTML entities. USDB metadata often
 // contains these, and UltraStar players may not handle them correctly.

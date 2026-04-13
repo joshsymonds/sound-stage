@@ -4,7 +4,10 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"time"
 )
+
+const delyricTimeout = 10 * time.Minute
 
 // DelyricProxyHandler proxies requests to the delyric worker at the given base URL.
 // Returns 503 if the worker is unreachable.
@@ -15,7 +18,7 @@ func DelyricProxyHandler(delyricURL, method, endpoint string) http.Handler {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(r.Context(), proxyTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), delyricTimeout)
 		defer cancel()
 
 		targetURL := delyricURL + endpoint
@@ -38,6 +41,6 @@ func DelyricProxyHandler(delyricURL, method, endpoint string) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxProxyResponse))
 	})
 }

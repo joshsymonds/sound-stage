@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/joshsymonds/sound-stage/archive"
@@ -67,6 +66,7 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		var req downloadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -131,7 +131,7 @@ func runDownload(dlConfig DownloadConfig, songID int, logger *slog.Logger) error
 		return fmt.Errorf("getting song txt: %w", err)
 	}
 
-	dirName := sanitizePath(fmt.Sprintf("%s - %s", details.Artist, details.Title))
+	dirName := usdb.SanitizePath(fmt.Sprintf("%s - %s", details.Artist, details.Title))
 	songDir := filepath.Join(dlConfig.OutputDir, dirName)
 
 	song, err := usdb.PrepareSong(txt, details, songDir)
@@ -181,19 +181,4 @@ func runDownload(dlConfig DownloadConfig, songID int, logger *slog.Logger) error
 	}
 
 	return nil
-}
-
-func sanitizePath(input string) string {
-	replacer := strings.NewReplacer(
-		"/", "-",
-		"\\", "-",
-		":", "-",
-		"*", "",
-		"?", "",
-		"\"", "",
-		"<", "",
-		">", "",
-		"|", "",
-	)
-	return strings.TrimSpace(replacer.Replace(usdb.NormalizeText(input)))
 }

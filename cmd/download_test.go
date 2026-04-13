@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/joshsymonds/sound-stage/usdb"
 )
 
 func TestSanitizePath(t *testing.T) {
@@ -30,9 +32,9 @@ func TestSanitizePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := sanitizePath(tt.input)
+			got := usdb.SanitizePath(tt.input)
 			if got != tt.want {
-				t.Errorf("sanitizePath(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("SanitizePath(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

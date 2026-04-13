@@ -72,8 +72,7 @@ export async function fetchNowPlaying(): Promise<NowPlayingState | null> {
   if (!response.ok) {
     return null;
   }
-  const data = await response.json();
-  return data as NowPlayingState | null;
+  return response.json() as Promise<NowPlayingState | null>;
 }
 
 export async function pausePlayback(): Promise<void> {

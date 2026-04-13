@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-
   import {
     addToQueue,
     fetchNowPlaying,
@@ -20,6 +18,7 @@
   import SongCard from "$lib/components/SongCard.svelte";
   import { getGuestName, setGuestName } from "$lib/stores/session";
   import type { NowPlayingState, QueueEntry, Song } from "$lib/types";
+  import { onMount } from "svelte";
 
   const POLL_INTERVAL = 5000;
 
@@ -31,11 +30,16 @@
   let searchResults = $state<USDBResult[]>([]);
   let searchQuery = $state("");
   let loadingSongs = $state(false);
-  let loadingQueue = $state(false);
   let searching = $state(false);
   let paused = $state(false);
+  let errorMessage = $state<string | null>(null);
   let downloadingIds = $state<Set<number>>(new Set());
   let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+
+  function showError(message: string): void {
+    errorMessage = message;
+    setTimeout(() => { errorMessage = null; }, 4000);
+  }
 
   onMount(() => {
     guestName = getGuestName();
@@ -86,6 +90,7 @@
       songs = await fetchSongs();
     } catch {
       songs = [];
+      showError("Failed to load songs");
     } finally {
       loadingSongs = false;
     }
@@ -98,7 +103,7 @@
       await poll();
       activeTab = "queue";
     } catch {
-      // Silently fail for now.
+      showError("Failed to queue song");
     }
   }
 
@@ -111,6 +116,7 @@
       searchResults = await searchUSDB({ title: query });
     } catch {
       searchResults = [];
+      showError("Search failed");
     } finally {
       searching = false;
     }
@@ -128,7 +134,7 @@
     try {
       await triggerDownload(result.id);
     } catch {
-      // Download failed silently.
+      showError("Download failed");
     }
   }
 
@@ -153,6 +159,10 @@
 <svelte:head>
   <title>SoundStage</title>
 </svelte:head>
+
+{#if errorMessage}
+  <div class="toast">{errorMessage}</div>
+{/if}
 
 {#if guestName === null}
   <NameEntry onsubmit={handleJoin} />
@@ -337,5 +347,20 @@
     color: var(--color-cyan);
     padding: 0 var(--space-md);
     margin-top: calc(-1 * var(--space-xs));
+  }
+
+  .toast {
+    position: fixed;
+    top: var(--space-md);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--color-red);
+    color: white;
+    padding: var(--space-sm) var(--space-lg);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    font-weight: 500;
+    z-index: 100;
+    animation: fade-slide-up 200ms ease;
   }
 </style>

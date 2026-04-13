@@ -5,6 +5,8 @@ import (
 	"net/http"
 )
 
+const maxRequestBody = 1 << 20 // 1 MB
+
 type queueAddRequest struct {
 	SongID  int    `json:"songId"`
 	Title   string `json:"title"`
@@ -26,6 +28,7 @@ func QueueListHandler(queue *Queue) http.Handler {
 // QueueAddHandler adds a song to the queue for a guest.
 func QueueAddHandler(queue *Queue) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		var req queueAddRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)

@@ -126,11 +126,11 @@ describe("API client", () => {
       new Response(JSON.stringify({ status: "downloading" }), { status: 202 }),
     );
 
-    const status = await triggerDownload(12345);
+    const status = await triggerDownload(12_345);
     expect(fetch).toHaveBeenCalledWith("/api/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ songId: 12345 }),
+      body: JSON.stringify({ songId: 12_345 }),
     });
     expect(status).toBe("downloading");
   });

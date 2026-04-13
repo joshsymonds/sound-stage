@@ -1,3 +1,4 @@
+/* eslint-disable unicorn/no-document-cookie -- document.cookie is the standard API; CookieStore has poor browser support */
 const COOKIE_NAME = "guest_name";
 const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 

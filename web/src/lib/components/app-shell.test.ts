@@ -1,16 +1,9 @@
+import { textSnippet } from "$lib/test-helpers";
 import { cleanup, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AppShell from "./AppShell.svelte";
-
-function textSnippet(text: string) {
-  return (($$anchor: Comment) => {
-    const el = document.createElement("div");
-    el.textContent = text;
-    $$anchor.before(el);
-  }) as any;
-}
 
 describe("AppShell", () => {
   afterEach(cleanup);
@@ -47,7 +40,7 @@ describe("AppShell", () => {
     const { container } = render(AppShell, {
       props: { children: textSnippet("content"), activeTab: "queue" },
     });
-    const activeBtn = container.querySelector("nav .active");
-    expect(activeBtn?.textContent).toContain("Queue");
+    const activeButton = container.querySelector("nav .active");
+    expect(activeButton?.textContent).toContain("Queue");
   });
 });

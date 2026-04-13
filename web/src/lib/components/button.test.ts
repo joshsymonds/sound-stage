@@ -1,16 +1,9 @@
+import { textSnippet } from "$lib/test-helpers";
 import { cleanup, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import Button from "./Button.svelte";
-
-function textSnippet(text: string) {
-  return (($$anchor: Comment) => {
-    const el = document.createElement("span");
-    el.textContent = text;
-    $$anchor.before(el);
-  }) as any;
-}
 
 describe("Button", () => {
   afterEach(cleanup);
@@ -26,24 +19,24 @@ describe("Button", () => {
     render(Button, {
       props: { children: textSnippet("Click") },
     });
-    const btn = screen.getByRole("button");
-    expect(btn.className).toContain("primary");
+    const button = screen.getByRole("button");
+    expect(button.className).toContain("primary");
   });
 
   it("applies secondary variant", () => {
     render(Button, {
       props: { variant: "secondary", children: textSnippet("Browse") },
     });
-    const btn = screen.getByRole("button");
-    expect(btn.className).toContain("secondary");
+    const button = screen.getByRole("button");
+    expect(button.className).toContain("secondary");
   });
 
   it("applies ghost variant", () => {
     render(Button, {
       props: { variant: "ghost", children: textSnippet("Cancel") },
     });
-    const btn = screen.getByRole("button");
-    expect(btn.className).toContain("ghost");
+    const button = screen.getByRole("button");
+    expect(button.className).toContain("ghost");
   });
 
   it("applies size classes", () => {

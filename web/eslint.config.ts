@@ -26,6 +26,7 @@ export default tseslint.config(
       "*.config.ts",
       "*.config.js",
       "vitest-setup.ts",
+      "scripts/**",
     ],
   },
 
@@ -43,7 +44,9 @@ export default tseslint.config(
     languageOptions: {
       globals: globals.browser,
       parserOptions: {
-        projectService: true,
+        projectService: {
+          allowDefaultProject: ["scripts/*.ts"],
+        },
         tsconfigRootDir,
         extraFileExtensions: [".svelte"],
       },
@@ -209,6 +212,7 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-member-access": "off",
       "@typescript-eslint/no-unsafe-argument": "off",
       "@typescript-eslint/no-confusing-void-expression": "off",
+      "@typescript-eslint/prefer-nullish-coalescing": "off",
       "sonarjs/no-use-of-empty-return-value": "off",
     },
   },
@@ -248,6 +252,7 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/explicit-function-return-type": "off",
       "@typescript-eslint/naming-convention": "off",
+      "@typescript-eslint/no-empty-function": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",
       "max-lines-per-function": "off",
       "no-console": "off",
