@@ -1,3 +1,6 @@
+# Pinned: matches the version currently proven to work in devenv.nix with
+# the Mel-Band Roformer + HTDemucs_ft ensemble on the 5070 Ti. Newer releases
+# have shipped breaking ensemble-CLI changes — bump deliberately, not casually.
 audio-separator[gpu]==0.44.1
 fastapi==0.135.0
 uvicorn[standard]==0.37.0

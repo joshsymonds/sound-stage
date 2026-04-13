@@ -41,10 +41,10 @@ in
       runHook postInstall
     '';
 
-    meta = with lib; {
+    meta = {
       description = "FastAPI HTTP wrapper around the delyric vocal separation pipeline";
-      license = licenses.mit;
-      platforms = platforms.linux;
+      license = lib.licenses.mit;
+      platforms = lib.platforms.linux;
       mainProgram = "delyric-worker";
     };
   }

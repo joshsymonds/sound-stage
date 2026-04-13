@@ -41,4 +41,4 @@ export LD_LIBRARY_PATH="${NATIVE_LIBS}:/run/opengl-driver/lib${LD_LIBRARY_PATH:+
 export PATH="${FFMPEG_BIN}:${PATH:-}"
 
 cd "${SRC_DIR}"
-exec "${VENV}/bin/python" -m delyric_worker
+exec "${VENV}/bin/python" "${SRC_DIR}/delyric_worker.py"

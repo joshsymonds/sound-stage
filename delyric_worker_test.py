@@ -15,15 +15,10 @@ def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     monkeypatch.setenv("DELYRIC_LIBRARY", str(tmp_path))
     import delyric_worker as dw
 
-    with dw._jobs_lock:
-        dw._jobs.clear()
-    while not dw._queue.empty():
-        try:
-            dw._queue.get_nowait()
-            dw._queue.task_done()
-        except Exception:
-            break
+    dw._reset_for_tests()
+    assert dw._worker_thread is None
     yield tmp_path
+    dw._reset_for_tests()
 
 
 @pytest.fixture
@@ -83,6 +78,31 @@ class TestProcessValidation:
         assert resp.status_code == 400
         assert "audio.webm" in resp.text
 
+    def test_process_returns_distinct_job_ids(
+        self, client: TestClient, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+
+        monkeypatch.setattr(delyric, "process_song", lambda _p: None)
+        sd1 = _make_song_dir(reset_state, "Song A")
+        sd2 = _make_song_dir(reset_state, "Song B")
+        j1 = client.post("/process", json={"songPath": str(sd1)}).json()["jobId"]
+        j2 = client.post("/process", json={"songPath": str(sd2)}).json()["jobId"]
+        assert j1 != j2
+
+    def test_process_rejects_symlink_escaping_library(
+        self, client: TestClient, reset_state: Path, tmp_path_factory: pytest.TempPathFactory
+    ) -> None:
+        # Create a real dir outside the library with an audio.webm
+        outside = tmp_path_factory.mktemp("outside")
+        (outside / "audio.webm").write_bytes(b"fake")
+        # Symlink it into the library; resolve() should follow it out of the root
+        link = reset_state / "Evil - Song"
+        link.symlink_to(outside)
+        resp = client.post("/process", json={"songPath": str(link)})
+        assert resp.status_code == 400
+        assert "outside library" in resp.text
+
     def test_process_rejects_path_outside_library(self, client: TestClient) -> None:
         resp = client.post("/process", json={"songPath": "/etc"})
         assert resp.status_code == 400
@@ -137,6 +157,26 @@ class TestStatus:
         final = _wait_status(client, job_id, {"complete", "failed"})
         assert final["status"] == "failed"
         assert "boom" in (final["error"] or "")
+        assert "RuntimeError" in (final["error"] or "")
+
+    def test_worker_receives_canonicalized_path(
+        self, client: TestClient, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Worker must see the resolved path, not the raw input with `..` segments."""
+        import delyric
+
+        received: list[Path] = []
+
+        def capture(p: Path) -> None:
+            received.append(p)
+
+        monkeypatch.setattr(delyric, "process_song", capture)
+        song_dir = _make_song_dir(reset_state, "Canon Song")
+        # Raw input has a redundant /./sub/.. segment — resolve() should normalize it.
+        raw = f"{reset_state}/./Canon Song/../Canon Song"
+        job_id = client.post("/process", json={"songPath": raw}).json()["jobId"]
+        _wait_status(client, job_id, {"complete", "failed"})
+        assert received == [song_dir.resolve()]
 
 
 class TestSerialQueue:
@@ -187,3 +227,9 @@ class TestBindHostPrecheck:
         from delyric_worker import bind_host_available
 
         assert bind_host_available("nonexistent-host-xyz.invalid") is False
+
+    def test_fails_for_empty_host(self) -> None:
+        from delyric_worker import bind_host_available
+
+        assert bind_host_available("") is False
+        assert bind_host_available("   ") is False
