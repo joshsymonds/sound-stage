@@ -18,6 +18,9 @@
       ps.pytest
     ]))
 
+    # Web frontend (Svelte 5 + SvelteKit + Storybook)
+    pkgs.nodejs_22
+
     # Runtime dependencies
     pkgs.yt-dlp
     pkgs.ffmpeg
@@ -52,4 +55,7 @@
     fi
     export PATH="$DELYRIC_VENV/bin:$PATH"
   '';
+
+  processes.web.exec = "cd web && npm run dev";
+  processes.storybook.exec = "cd web && npm run storybook";
 }

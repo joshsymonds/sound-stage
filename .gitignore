@@ -23,5 +23,12 @@ sound-stage
 __pycache__/
 .pytest_cache/
 
+# Web frontend
+web/node_modules/
+web/.svelte-kit/
+web/build/
+web/storybook-static/
+web/screenshots/
+
 # OS
 .DS_Store

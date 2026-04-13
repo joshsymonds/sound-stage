@@ -6,7 +6,7 @@ set dotenv-filename := ".env.local"
 
 # Run all tests
 test:
-    go test -race ./...
+    go test -race $(go list ./... | grep -v /web/)
 
 # Run linter
 lint:
@@ -25,7 +25,7 @@ check: lint test
 
 # Run tests with verbose output
 test-v:
-    go test -race -v ./...
+    go test -race -v $(go list ./... | grep -v /web/)
 
 # Search USDB for songs (pass any flags after --)
 search *ARGS:
@@ -61,3 +61,48 @@ delyric-dry-run:
 # Run any sound-stage subcommand
 run *ARGS:
     go run . {{ARGS}}
+
+# ── Web frontend ─────────────────────────────────────────────
+
+# Start SvelteKit dev server
+dev-web:
+    cd web && npm run dev
+
+# Start Storybook
+storybook:
+    cd web && npm run storybook
+
+# Run web tests
+test-web:
+    cd web && npm run test
+
+# Lint web code
+lint-web:
+    cd web && npm run lint
+
+# Type-check web code
+check-web:
+    cd web && npm run check
+
+# Format web code
+fmt-web:
+    cd web && npm run format
+
+# Build web for production
+build-web:
+    cd web && npm run build
+
+# Screenshot stories (requires storybook running on :6006)
+screenshot *ARGS:
+    cd web && npx tsx scripts/screenshot.ts {{ARGS}}
+
+# Screenshot all stories
+screenshot-all:
+    cd web && npx tsx scripts/screenshot.ts --all
+
+# Build web + start Go server serving the SPA
+serve-dev: build-web
+    go run . serve --static web/build --port 8080
+
+# Run all checks (Go + web)
+check-all: check check-web

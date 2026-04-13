@@ -179,6 +179,7 @@ linters:
         - fmt.Fprintf
         - fmt.Fprintln
         - (*text/tabwriter.Writer).Flush
+        - io.Copy
         - os.Setenv
         - os.Unsetenv
 
@@ -447,6 +448,8 @@ linters:
 
   exclusions:
     warn-unused: false
+    paths:
+      - web
 
     rules:
       - text: "will be used as .* by other packages, and that stutters"

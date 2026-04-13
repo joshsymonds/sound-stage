@@ -211,7 +211,7 @@ func sanitizePath(input string) string {
 		">", "",
 		"|", "",
 	)
-	return strings.TrimSpace(replacer.Replace(input))
+	return strings.TrimSpace(replacer.Replace(usdb.NormalizeText(input)))
 }
 
 // validateProxy checks that the proxy URL, if set, uses a supported scheme.

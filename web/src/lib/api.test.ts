@@ -1,0 +1,145 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { addToQueue, fetchQueue, fetchSongs, searchUSDB, skipQueue, triggerDownload } from "./api";
+import type { QueueEntry, Song } from "./types";
+
+const mockSongs: Song[] = [
+  { id: 1, title: "Bohemian Rhapsody", artist: "Queen", year: 1975 },
+  { id: 2, title: "Dancing Queen", artist: "ABBA", edition: "ESC 1974" },
+];
+
+const mockQueue: QueueEntry[] = [
+  { position: 1, song: mockSongs[0]!, guest: "Alice", isNext: true },
+  { position: 2, song: mockSongs[1]!, guest: "Bob", isNext: false },
+];
+
+describe("API client", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetchSongs calls GET /api/songs and returns Song[]", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(mockSongs), { status: 200 }),
+    );
+
+    const songs = await fetchSongs();
+    expect(fetch).toHaveBeenCalledWith("/api/songs");
+    expect(songs).toHaveLength(2);
+    expect(songs[0]?.title).toBe("Bohemian Rhapsody");
+  });
+
+  it("fetchSongs throws on non-OK response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("error", { status: 500 }),
+    );
+
+    await expect(fetchSongs()).rejects.toThrow("fetch songs");
+  });
+
+  it("fetchQueue calls GET /api/queue and returns QueueEntry[]", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(mockQueue), { status: 200 }),
+    );
+
+    const queue = await fetchQueue();
+    expect(fetch).toHaveBeenCalledWith("/api/queue");
+    expect(queue).toHaveLength(2);
+    expect(queue[0]?.guest).toBe("Alice");
+  });
+
+  it("addToQueue calls POST /api/queue with song and guest", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: "queued" }), { status: 201 }),
+    );
+
+    await addToQueue(mockSongs[0]!, "Alice");
+    expect(fetch).toHaveBeenCalledWith("/api/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        songId: 1,
+        title: "Bohemian Rhapsody",
+        artist: "Queen",
+        edition: undefined,
+        year: 1975,
+        guest: "Alice",
+      }),
+    });
+  });
+
+  it("addToQueue throws on non-OK response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("error", { status: 400 }),
+    );
+
+    await expect(addToQueue(mockSongs[0]!, "Alice")).rejects.toThrow("add to queue");
+  });
+
+  it("skipQueue calls POST /api/queue/skip and returns entry", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(mockQueue[0]), { status: 200 }),
+    );
+
+    const entry = await skipQueue();
+    expect(fetch).toHaveBeenCalledWith("/api/queue/skip", { method: "POST" });
+    expect(entry?.song.title).toBe("Bohemian Rhapsody");
+  });
+
+  it("skipQueue returns null on 204", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(null, { status: 204 }),
+    );
+
+    const entry = await skipQueue();
+    expect(entry).toBeNull();
+  });
+
+  it("searchUSDB calls GET /api/usdb/search with query params", async () => {
+    const mockResults = [
+      { id: 100, artist: "Queen", title: "Bohemian Rhapsody", language: "English" },
+    ];
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify(mockResults), { status: 200 }),
+    );
+
+    const results = await searchUSDB({ artist: "Queen" });
+    expect(fetch).toHaveBeenCalledWith("/api/usdb/search?artist=Queen");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.title).toBe("Bohemian Rhapsody");
+  });
+
+  it("searchUSDB throws on non-OK response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("error", { status: 502 }),
+    );
+
+    await expect(searchUSDB({ title: "test" })).rejects.toThrow("search USDB");
+  });
+
+  it("triggerDownload calls POST /api/download", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: "downloading" }), { status: 202 }),
+    );
+
+    const status = await triggerDownload(12345);
+    expect(fetch).toHaveBeenCalledWith("/api/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ songId: 12345 }),
+    });
+    expect(status).toBe("downloading");
+  });
+
+  it("triggerDownload throws on non-OK response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("error", { status: 400 }),
+    );
+
+    await expect(triggerDownload(0)).rejects.toThrow("trigger download");
+  });
+});

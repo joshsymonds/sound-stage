@@ -2,6 +2,7 @@ package usdb
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,15 +31,18 @@ func PrepareSong(rawTxt string, details *SongDetails, songDir string) (*Prepared
 
 	headers, body := parseTxt(rawTxt)
 
-	// Determine artist/title from txt headers, fall back to detail page
-	artist := headerValue(headers, "ARTIST")
+	// Determine artist/title from txt headers, fall back to detail page.
+	// Normalize to replace smart quotes and HTML entities from USDB.
+	artist := NormalizeText(headerValue(headers, "ARTIST"))
 	if artist == "" {
-		artist = details.Artist
+		artist = NormalizeText(details.Artist)
 	}
-	title := headerValue(headers, "TITLE")
+	title := NormalizeText(headerValue(headers, "TITLE"))
 	if title == "" {
-		title = details.Title
+		title = NormalizeText(details.Title)
 	}
+	headers = setHeader(headers, "ARTIST", artist)
+	headers = setHeader(headers, "TITLE", title)
 
 	audioFile := "audio.webm"
 	videoFile := "video.webm"
@@ -130,4 +134,27 @@ func formatTxt(headers []header, body string) string {
 	}
 	b.WriteString(body)
 	return b.String()
+}
+
+// NormalizeText replaces Unicode smart quotes and other typographic characters
+// with their ASCII equivalents, and decodes HTML entities. USDB metadata often
+// contains these, and UltraStar players may not handle them correctly.
+func NormalizeText(text string) string {
+	text = html.UnescapeString(text)
+	replacer := strings.NewReplacer(
+		"\u2018", "'", // left single quotation mark
+		"\u2019", "'", // right single quotation mark
+		"\u201A", "'", // single low-9 quotation mark
+		"\u201B", "'", // single high-reversed-9 quotation mark
+		"\u201C", "\"", // left double quotation mark
+		"\u201D", "\"", // right double quotation mark
+		"\u201E", "\"", // double low-9 quotation mark
+		"\u201F", "\"", // double high-reversed-9 quotation mark
+		"\u2032", "'", // prime
+		"\u2033", "\"", // double prime
+		"\u2013", "-", // en dash
+		"\u2014", "-", // em dash
+		"\u2026", "...", // ellipsis
+	)
+	return replacer.Replace(text)
 }

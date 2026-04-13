@@ -1,0 +1,145 @@
+/* ── Global resets & theme ────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* ── Colors ──────────────────────────────────────────────── */
+  --color-bg: #0a0a0f;
+  --color-surface: #12121a;
+  --color-surface-raised: #1a1a25;
+  --color-border: rgba(255, 45, 123, 0.15);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+
+  /* Primary — hot pink / magenta */
+  --color-pink: #ff2d7b;
+  --color-pink-light: #ff5a9e;
+  --color-pink-dim: #cc2462;
+
+  /* Secondary accents */
+  --color-cyan: #00f0ff;
+  --color-purple: #b44dff;
+  --color-green: #00ff88;
+  --color-yellow: #ffe14d;
+  --color-red: #ff4d4d;
+
+  /* Text */
+  --color-text: #f0f0f5;
+  --color-text-dim: #b0b0c0;
+  --color-text-muted: #6a6a80;
+
+  /* ── Typography ─────────────────────────────────────────── */
+  --font-body: "Inter", system-ui, -apple-system, sans-serif;
+
+  /* ── Neon glow ──────────────────────────────────────────── */
+  --glow-pink: 0 0 8px rgba(255, 45, 123, 0.4), 0 0 24px rgba(255, 45, 123, 0.15);
+  --glow-pink-strong: 0 0 8px rgba(255, 45, 123, 0.6), 0 0 32px rgba(255, 45, 123, 0.3),
+    0 0 64px rgba(255, 45, 123, 0.1);
+  --glow-cyan: 0 0 8px rgba(0, 240, 255, 0.4), 0 0 24px rgba(0, 240, 255, 0.15);
+  --glow-purple: 0 0 8px rgba(180, 77, 255, 0.4), 0 0 24px rgba(180, 77, 255, 0.15);
+  --glow-text-pink: 0 0 12px rgba(255, 45, 123, 0.5), 0 0 4px rgba(255, 45, 123, 0.3);
+
+  /* ── Spacing scale ──────────────────────────────────────── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* ── Radii ──────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* ── Transitions ────────────────────────────────────────── */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: rgba(255, 45, 123, 0.25);
+  color: var(--color-pink-light);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 45, 123, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 45, 123, 0.35);
+}
+
+/* ── Animations ───────────────────────────────────────────── */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes neon-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes glow-breathe {
+  0%,
+  100% {
+    box-shadow: var(--glow-pink);
+  }
+  50% {
+    box-shadow: var(--glow-pink-strong);
+  }
+}
