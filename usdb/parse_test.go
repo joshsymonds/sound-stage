@@ -75,9 +75,18 @@ func TestExtractTextarea(t *testing.T) {
 
 func TestExtractTextarea_NoTextarea(t *testing.T) {
 	t.Parallel()
+	// Missing textarea with no rate-limit markers (e.g. USDB's short nav-shell
+	// response under load) must be treated as retriable so the client recovers.
 	_, err := extractTextarea("<html><body>no textarea here</body></html>")
 	if err == nil {
-		t.Error("expected error for missing textarea, got nil")
+		t.Fatal("expected error for missing textarea, got nil")
+	}
+	var rlErr *RateLimitError
+	if !errors.As(err, &rlErr) {
+		t.Fatalf("expected *RateLimitError, got %T: %v", err, err)
+	}
+	if rlErr.Wait != defaultRateLimitWait {
+		t.Errorf("Wait = %v, want %v (default)", rlErr.Wait, defaultRateLimitWait)
 	}
 }
 

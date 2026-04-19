@@ -62,14 +62,18 @@ var rateLimitWaitRegex = regexp.MustCompile(`(?m)\btime\s*=\s*(\d+)\s*;`)
 var textareaRegex = regexp.MustCompile(`(?s)<textarea[^>]*>(.*?)</textarea>`)
 
 // extractTextarea pulls the UltraStar txt content from a USDB gettxt response.
-// Returns a *RateLimitError if the response is a rate-limit countdown page.
+// Any response without a textarea is treated as a rate-limit signal and returned
+// as *RateLimitError so the caller retries. USDB sometimes returns a short
+// nav-shell page (~3.5kB, no textarea, no "Please wait" marker) under load
+// instead of the canonical countdown page; both cases recover on retry.
 func extractTextarea(html string) (string, error) {
 	match := textareaRegex.FindStringSubmatch(html)
 	if match == nil {
-		if wait, ok := parseRateLimit(html); ok {
-			return "", &RateLimitError{Wait: wait}
+		wait, _ := parseRateLimit(html)
+		if wait == 0 {
+			wait = defaultRateLimitWait
 		}
-		return "", fmt.Errorf("no textarea found in response (song may not exist)")
+		return "", &RateLimitError{Wait: wait}
 	}
 	return strings.TrimSpace(match[1]), nil
 }
