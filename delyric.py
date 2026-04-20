@@ -148,7 +148,7 @@ def process_song(song_dir: Path, dry_run: bool = False) -> None:
         click.echo(f"  Would process: {song_dir.name}")
         return
 
-    with tempfile.TemporaryDirectory(prefix="delyric_") as tmpdir:
+    with tempfile.TemporaryDirectory(prefix="delyric_", dir="/var/tmp") as tmpdir:
         tmpdir_path = Path(tmpdir)
 
         # Separate
@@ -174,7 +174,8 @@ def process_song(song_dir: Path, dry_run: bool = False) -> None:
 @click.option("--dry-run", is_flag=True, help="Preview what would be processed.")
 @click.option("--song", "song_name", help="Process a single song directory by name.")
 @click.option("--force", is_flag=True, help="Reprocess even if outputs exist.")
-def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool) -> None:
+@click.option("--limit", type=int, default=None, help="Process at most N songs.")
+def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, limit: int | None) -> None:
     """Separate vocals from instrumentals in UltraStar karaoke songs.
 
     Processes songs in LIBRARY_DIR (default: /mnt/music/sound-stage/) using
@@ -204,6 +205,9 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool) -
         unprocessed = [s for s in songs if not is_processed(s)]
     else:
         unprocessed = songs
+
+    if limit is not None:
+        unprocessed = unprocessed[:limit]
 
     total = len(songs)
     to_process = len(unprocessed)
