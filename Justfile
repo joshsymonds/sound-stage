@@ -112,5 +112,15 @@ serve-dev: build-web
 fake-deck *ARGS:
     go run ./cmd/fake-usdx {{ARGS}}
 
+# Run fake-usdx + real server pointed at it (full dev stack, no Deck needed)
+serve-dev-fake: build-web
+    #!/usr/bin/env bash
+    set -e
+    go run ./cmd/fake-usdx --addr :9000 &
+    FAKE_PID=$!
+    trap "kill $FAKE_PID 2>/dev/null || true" EXIT
+    sleep 0.3
+    go run . serve --static web/build --port 8080 --deck-url http://localhost:9000
+
 # Run all checks (Go + web)
 check-all: check check-web
