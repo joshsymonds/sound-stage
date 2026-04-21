@@ -10,13 +10,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/joshsymonds/sound-stage/server/stableid"
+	"github.com/joshsymonds/sound-stage/server/txtparse"
 )
 
 // Song represents a song in the library, matching the frontend Song interface.
+// ID is the 16-hex stableid.Compute(Artist, Title, Duet) hash — matches the
+// identity USDX uses, so POST /queue can resolve it on the Deck side.
 type Song struct {
-	ID      int    `json:"id"`
+	ID      string `json:"id"`
 	Title   string `json:"title"`
 	Artist  string `json:"artist"`
+	Duet    bool   `json:"duet"`
 	Edition string `json:"edition,omitempty"`
 	Year    int    `json:"year,omitempty"`
 }
@@ -45,8 +51,9 @@ func scanLibrary(dir string) ([]Song, error) {
 		return nil, fmt.Errorf("reading library directory: %w", err)
 	}
 
+	logger := slog.Default()
 	songs := make([]Song, 0, len(entries))
-	songID := 1
+	seenIDs := make(map[string]string, len(entries))
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -54,62 +61,72 @@ func scanLibrary(dir string) ([]Song, error) {
 		}
 
 		txtPath := filepath.Join(dir, entry.Name(), "song.txt")
-		if song, parseErr := parseSongFile(txtPath, songID); parseErr == nil {
-			songs = append(songs, song)
-			songID++
+		song, parseErr := parseSongFile(txtPath)
+		if parseErr != nil {
+			continue
 		}
+
+		if existingPath, collides := seenIDs[song.ID]; collides {
+			logger.Warn("song id collision",
+				"id", song.ID,
+				"keeping_path", existingPath,
+				"discarded_path", txtPath,
+			)
+			continue
+		}
+		seenIDs[song.ID] = txtPath
+		songs = append(songs, song)
 	}
 
 	return songs, nil
 }
 
-func parseSongFile(path string, id int) (Song, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from library dir + entry name, not user input
+func parseSongFile(path string) (Song, error) {
+	parsed, err := txtparse.Parse(path)
 	if err != nil {
-		return Song{}, fmt.Errorf("reading song file: %w", err)
+		return Song{}, fmt.Errorf("parse: %w", err)
 	}
 
-	headers := parseHeaders(string(data))
-
-	year, _ := strconv.Atoi(headerVal(headers, "YEAR")) //nolint:errcheck // invalid year is fine, defaults to 0
+	edition, year := readOptionalHeaders(path)
 
 	return Song{
-		ID:      id,
-		Title:   headerVal(headers, "TITLE"),
-		Artist:  headerVal(headers, "ARTIST"),
-		Edition: headerVal(headers, "EDITION"),
+		ID:      stableid.Compute(parsed.Artist, parsed.Title, parsed.Duet),
+		Title:   parsed.Title,
+		Artist:  parsed.Artist,
+		Duet:    parsed.Duet,
+		Edition: edition,
 		Year:    year,
 	}, nil
 }
 
-type hdr struct {
-	key   string
-	value string
-}
-
-func parseHeaders(txt string) []hdr {
-	var headers []hdr
-	for _, line := range strings.Split(txt, "\n") {
+// readOptionalHeaders extracts #EDITION and #YEAR from the .txt header block.
+// These are not required; missing values return "" and 0. Errors are swallowed
+// — the song is still usable without them.
+func readOptionalHeaders(path string) (edition string, year int) {
+	data, err := os.ReadFile(path) //nolint:gosec // path constructed from library dir + entry name
+	if err != nil {
+		return "", 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "#") {
 			break
 		}
-		parts := strings.SplitN(line[1:], ":", 2)
-		if len(parts) == 2 {
-			headers = append(headers, hdr{
-				key:   strings.TrimSpace(parts[0]),
-				value: strings.TrimSpace(parts[1]),
-			})
+		colon := strings.IndexByte(line, ':')
+		if colon < 0 {
+			continue
+		}
+		key := strings.ToUpper(strings.TrimSpace(line[1:colon]))
+		val := strings.TrimSpace(line[colon+1:])
+		switch key {
+		case "EDITION":
+			edition = val
+		case "YEAR":
+			y, convErr := strconv.Atoi(val)
+			if convErr == nil {
+				year = y
+			}
 		}
 	}
-	return headers
-}
-
-func headerVal(headers []hdr, key string) string {
-	for _, h := range headers {
-		if strings.EqualFold(h.key, key) {
-			return h.value
-		}
-	}
-	return ""
+	return edition, year
 }

@@ -1,13 +1,14 @@
 package server_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/joshsymonds/sound-stage/server"
 )
 
 func song(id int, title string) server.Song {
-	return server.Song{ID: id, Title: title, Artist: "Test Artist"}
+	return server.Song{ID: fmt.Sprintf("%016x", id), Title: title, Artist: "Test Artist"}
 }
 
 func TestQueue(t *testing.T) {

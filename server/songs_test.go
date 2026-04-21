@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/joshsymonds/sound-stage/server"
+	"github.com/joshsymonds/sound-stage/server/stableid"
 )
 
 func writeSongTxt(t *testing.T, dir, artist, title string) {
@@ -112,6 +113,88 @@ func TestSongsHandler(t *testing.T) {
 		}
 		if len(songs) != 1 {
 			t.Fatalf("expected 1 song, got %d", len(songs))
+		}
+	})
+
+	t.Run("IDs are stableid hashes of (artist, title, duet)", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeSongTxt(t, dir, "ABBA", "Dancing Queen")
+
+		handler := server.SongsHandler(dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 {
+			t.Fatalf("expected 1 song, got %d", len(songs))
+		}
+		want := stableid.Compute("ABBA", "Dancing Queen", false)
+		if songs[0].ID != want {
+			t.Errorf("id = %q, want %q (stableid.Compute parity)", songs[0].ID, want)
+		}
+		if songs[0].Duet {
+			t.Errorf("duet = true, want false")
+		}
+	})
+
+	t.Run("collision keeps first, discards subsequent", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// Two distinct directories with identical artist/title → identical stableid.
+		dirA := filepath.Join(dir, "A-ABBA - Dancing Queen")
+		dirB := filepath.Join(dir, "B-ABBA - Dancing Queen")
+		for _, songDir := range []string{dirA, dirB} {
+			if err := os.MkdirAll(songDir, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			txt := "#TITLE:Dancing Queen\n#ARTIST:ABBA\n#MP3:audio.webm\n: 0 5 10 Hi\nE\n"
+			if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		handler := server.SongsHandler(dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 {
+			t.Errorf("expected 1 song after collision, got %d", len(songs))
+		}
+	})
+
+	t.Run("detects duet via P1/P2 markers", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		songDir := filepath.Join(dir, "Kenny & Dolly - Islands")
+		if err := os.MkdirAll(songDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		txt := "#TITLE:Islands\n#ARTIST:Kenny & Dolly\n#MP3:audio.webm\nP1\n: 0 4 60 X\nP2\n: 4 4 60 Y\nE\n"
+		if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		handler := server.SongsHandler(dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 || !songs[0].Duet {
+			t.Errorf("expected one duet song, got %+v", songs)
 		}
 	})
 }

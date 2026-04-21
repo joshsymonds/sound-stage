@@ -38,7 +38,7 @@ func TestQueueHandlers(t *testing.T) {
 		q := server.NewQueue()
 		handler := server.QueueAddHandler(q)
 
-		body := `{"songId": 1, "title": "Bohemian Rhapsody", "artist": "Queen", "guest": "Alice"}`
+		body := `{"songId": "deadbeef00000001", "title": "Bohemian Rhapsody", "artist": "Queen", "guest": "Alice"}`
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/queue", strings.NewReader(body)))
 
@@ -63,7 +63,7 @@ func TestQueueHandlers(t *testing.T) {
 		q := server.NewQueue()
 		handler := server.QueueAddHandler(q)
 
-		body := `{"songId": 1, "title": "Test", "artist": "Test"}`
+		body := `{"songId": "deadbeef00000001", "title": "Test", "artist": "Test"}`
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/queue", strings.NewReader(body)))
 
@@ -75,8 +75,8 @@ func TestQueueHandlers(t *testing.T) {
 	t.Run("POST /api/queue/skip returns next song", func(t *testing.T) {
 		t.Parallel()
 		q := server.NewQueue()
-		q.Add(server.Song{ID: 1, Title: "First", Artist: "A"}, "Alice")
-		q.Add(server.Song{ID: 2, Title: "Second", Artist: "B"}, "Bob")
+		q.Add(server.Song{ID: "deadbeef00000001", Title: "First", Artist: "A"}, "Alice")
+		q.Add(server.Song{ID: "deadbeef00000002", Title: "Second", Artist: "B"}, "Bob")
 
 		handler := server.QueueSkipHandler(q)
 		rec := httptest.NewRecorder()

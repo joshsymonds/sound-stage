@@ -1,7 +1,8 @@
 export interface Song {
-  id: number;
+  id: string;
   title: string;
   artist: string;
+  duet?: boolean;
   edition?: string;
   year?: number;
   coverUrl?: string;

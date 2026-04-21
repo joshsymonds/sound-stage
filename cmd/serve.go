@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -12,8 +11,6 @@ import (
 	"github.com/joshsymonds/sound-stage/usdb"
 	"github.com/joshsymonds/sound-stage/ytdlp"
 )
-
-const deckPollInterval = 2 * time.Second
 
 var (
 	servePort       string
@@ -69,18 +66,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Shared queue used by both HTTP handlers and the deck poller.
 	queue := server.NewQueue()
 	srv := server.NewWithQueue(cfg, queue)
 
-	// Start deck poller if deck URL is configured.
-	var poller *server.DeckPoller
 	if cfg.DeckURL != "" {
-		fmt.Fprintf(os.Stderr, "Deck API: %s (polling every %s)\n", cfg.DeckURL, deckPollInterval)
-		poller = server.NewDeckPoller(cfg.DeckURL, queue, deckPollInterval)
-		poller.Start()
+		fmt.Fprintf(os.Stderr, "Deck API: %s\n", cfg.DeckURL)
 	}
-
 	if cfg.DelyricURL != "" {
 		fmt.Fprintf(os.Stderr, "Delyric worker: %s\n", cfg.DelyricURL)
 	}
@@ -97,9 +88,6 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}()
 
 	<-stop
-	if poller != nil {
-		poller.Stop()
-	}
 	fmt.Fprintln(os.Stderr, "shutting down")
 	return nil
 }

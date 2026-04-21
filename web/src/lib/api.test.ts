@@ -4,8 +4,8 @@ import { addToQueue, fetchQueue, fetchSongs, searchUSDB, skipQueue, triggerDownl
 import type { QueueEntry, Song } from "./types";
 
 const mockSongs: Song[] = [
-  { id: 1, title: "Bohemian Rhapsody", artist: "Queen", year: 1975 },
-  { id: 2, title: "Dancing Queen", artist: "ABBA", edition: "ESC 1974" },
+  { id: "deadbeef00000001", title: "Bohemian Rhapsody", artist: "Queen", year: 1975 },
+  { id: "deadbeef00000002", title: "Dancing Queen", artist: "ABBA", edition: "ESC 1974" },
 ];
 
 const mockQueue: QueueEntry[] = [
@@ -62,7 +62,7 @@ describe("API client", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        songId: 1,
+        songId: "deadbeef00000001",
         title: "Bohemian Rhapsody",
         artist: "Queen",
         edition: undefined,

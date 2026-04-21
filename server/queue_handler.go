@@ -8,9 +8,10 @@ import (
 const maxRequestBody = 1 << 20 // 1 MB
 
 type queueAddRequest struct {
-	SongID  int    `json:"songId"`
+	SongID  string `json:"songId"`
 	Title   string `json:"title"`
 	Artist  string `json:"artist"`
+	Duet    bool   `json:"duet"`
 	Edition string `json:"edition"`
 	Year    int    `json:"year"`
 	Guest   string `json:"guest"`
@@ -49,6 +50,7 @@ func QueueAddHandler(queue *Queue) http.Handler {
 			ID:      req.SongID,
 			Title:   req.Title,
 			Artist:  req.Artist,
+			Duet:    req.Duet,
 			Edition: req.Edition,
 			Year:    req.Year,
 		}

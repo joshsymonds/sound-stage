@@ -1,11 +1,8 @@
 package fakeusdx
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/joshsymonds/sound-stage/server/stableid"
+	"github.com/joshsymonds/sound-stage/server/txtparse"
 )
 
 // parseRefreshBody validates the POST /refresh request shape. The returned
@@ -84,18 +82,18 @@ func (f *Fake) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	song, err := parseTxtFile(path)
+	parsed, err := txtparse.Parse(path)
 	if err != nil {
 		writeAddedFalseError(w, http.StatusBadRequest, "parse failed")
 		return
 	}
 
-	id := stableid.Compute(song.Artist, song.Title, song.Duet)
+	id := stableid.Compute(parsed.Artist, parsed.Title, parsed.Duet)
 	entry := songEntry{
 		ID:     id,
-		Title:  song.Title,
-		Artist: song.Artist,
-		Duet:   song.Duet,
+		Title:  parsed.Title,
+		Artist: parsed.Artist,
+		Duet:   parsed.Duet,
 		Path:   path,
 	}
 
@@ -112,7 +110,7 @@ func (f *Fake) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"added": true,
 		"id":    id,
-		"title": song.Title,
+		"title": parsed.Title,
 	})
 }
 
@@ -145,54 +143,4 @@ func (f *Fake) applyRefreshLocked(entry songEntry) {
 // different body shape is mandated by API.md.
 func writeAddedFalseError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"added": false, "error": msg})
-}
-
-// parseTxtFile reads and parses a USDX .txt file, extracting #ARTIST, #TITLE,
-// and duet state. Returns an error for any missing or empty required field.
-func parseTxtFile(path string) (Song, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // dev-only fake; path comes from trusted LAN POST body
-	if err != nil {
-		return Song{}, fmt.Errorf("read %s: %w", path, err)
-	}
-
-	var artist, title string
-	duet := false
-
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r\n")
-		trimmed := strings.TrimSpace(line)
-
-		// Standalone P1 / P2 markers indicate duet songs.
-		if trimmed == "P1" || trimmed == "P2" {
-			duet = true
-			continue
-		}
-		if !strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		colon := strings.IndexByte(line, ':')
-		if colon < 0 {
-			continue
-		}
-		key := strings.ToUpper(strings.TrimSpace(line[1:colon]))
-		val := strings.TrimSpace(line[colon+1:])
-		switch key {
-		case "ARTIST":
-			artist = val
-		case "TITLE":
-			title = val
-		case "DUETSINGERP1", "DUETSINGERP2":
-			duet = true
-		}
-	}
-	if scanErr := scanner.Err(); scanErr != nil {
-		return Song{}, fmt.Errorf("scan %s: %w", path, scanErr)
-	}
-
-	if artist == "" || title == "" {
-		return Song{}, errors.New("missing #ARTIST or #TITLE")
-	}
-	return Song{Artist: artist, Title: title, Duet: duet}, nil
 }
