@@ -104,7 +104,7 @@ screenshot-all:
 
 # Build web + start Go server serving the SPA
 serve-dev: build-web
-    go run . serve --static web/build --port 8080
+    go run . serve --port 8080
 
 # ── USDX stand-in ────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ serve-dev-fake: build-web
     FAKE_PID=$!
     trap "kill $FAKE_PID 2>/dev/null || true" EXIT
     sleep 0.3
-    go run . serve --static web/build --port 8080 --deck-url http://localhost:9000
+    go run . serve --port 8080 --deck-url http://localhost:9000
 
 # Run all checks (Go + web)
 check-all: check check-web

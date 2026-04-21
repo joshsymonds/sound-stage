@@ -3,7 +3,6 @@ package server
 import (
 	"io/fs"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -12,7 +11,10 @@ import (
 type Config struct {
 	Port       string
 	LibraryDir string
-	StaticDir  string
+	// StaticFS holds the SPA assets to serve at /. In production, this is the
+	// embed.FS sub-tree wired in main.go. Tests pass an fstest.MapFS. A nil
+	// StaticFS disables the SPA route entirely (API-only mode).
+	StaticFS   fs.FS
 	Searcher   USDBSearcher
 	Download   *DownloadConfig
 	DeckURL    string // Pascal API base URL (e.g. "http://172.31.0.39:9000")
@@ -63,8 +65,8 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	}
 
 	// SPA static file server with fallback to index.html.
-	if cfg.StaticDir != "" {
-		mux.Handle("/", spaHandler(cfg.StaticDir))
+	if cfg.StaticFS != nil {
+		mux.Handle("/", spaHandler(cfg.StaticFS))
 	}
 
 	return mux
@@ -86,10 +88,10 @@ func NewWithQueue(cfg Config, queue *Queue) *http.Server {
 	}
 }
 
-// spaHandler serves static files from dir, falling back to index.html
+// spaHandler serves static files from staticFS, falling back to index.html
 // for non-file routes (SPA client-side routing).
-func spaHandler(dir string) http.Handler {
-	fileServer := http.FileServer(http.Dir(dir))
+func spaHandler(staticFS fs.FS) http.Handler {
+	fileServer := http.FileServerFS(staticFS)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -98,9 +100,9 @@ func spaHandler(dir string) http.Handler {
 			return
 		}
 
-		// Check if the file exists on disk.
+		// Check if the file exists in the embedded/passed FS.
 		cleanPath := strings.TrimPrefix(path, "/")
-		if _, err := fs.Stat(os.DirFS(dir), cleanPath); err == nil {
+		if _, err := fs.Stat(staticFS, cleanPath); err == nil {
 			fileServer.ServeHTTP(w, r)
 			return
 		}

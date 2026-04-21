@@ -26,7 +26,8 @@ __pycache__/
 # Web frontend
 web/node_modules/
 web/.svelte-kit/
-web/build/
+web/build/*
+!web/build/.keep
 web/storybook-static/
 web/screenshots/
 

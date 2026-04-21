@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"time"
@@ -15,9 +16,19 @@ import (
 
 const queueDriverInterval = 2 * time.Second
 
+// staticFS holds the SPA assets to serve at /. Set by SetStaticFS, which
+// main.go calls with the embed.FS subtree before invoking Execute.
+// A nil staticFS disables the SPA route (API-only mode, primarily for tests).
+var staticFS fs.FS
+
+// SetStaticFS configures the SPA filesystem the serve command will mount.
+// Intended to be called once from main before Execute.
+func SetStaticFS(f fs.FS) {
+	staticFS = f
+}
+
 var (
 	servePort       string
-	serveStaticDir  string
 	serveDeckURL    string
 	serveDelyricURL string
 )
@@ -32,7 +43,6 @@ and provides API endpoints for the karaoke queue system.`,
 
 func init() {
 	serveCmd.Flags().StringVar(&servePort, "port", "8080", "HTTP server port")
-	serveCmd.Flags().StringVar(&serveStaticDir, "static", "", "directory to serve static files from (SPA)")
 	serveCmd.Flags().StringVar(
 		&serveDeckURL, "deck-url", "",
 		"Steam Deck Pascal API base URL (e.g. http://172.31.0.39:9000)",
@@ -48,7 +58,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	cfg := server.Config{
 		Port:       servePort,
 		LibraryDir: outputDir,
-		StaticDir:  serveStaticDir,
+		StaticFS:   staticFS,
 		DeckURL:    serveDeckURL,
 		DelyricURL: serveDelyricURL,
 	}

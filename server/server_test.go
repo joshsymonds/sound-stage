@@ -4,9 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/joshsymonds/sound-stage/server"
 )
@@ -14,20 +13,19 @@ import (
 func TestSPAFallback(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>SPA</html>"), 0o600); err != nil {
-		t.Fatal(err)
+	staticFS := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html>SPA</html>")},
+		"style.css":  &fstest.MapFile{Data: []byte("body{}")},
+		"_app/immutable/abc.js": &fstest.MapFile{
+			Data: []byte("console.log('app')"),
+		},
 	}
-	if err := os.WriteFile(filepath.Join(dir, "style.css"), []byte("body{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	songDir := t.TempDir()
 
 	handler := server.Handler(server.Config{
 		Port:       "0",
 		LibraryDir: songDir,
-		StaticDir:  dir,
+		StaticFS:   staticFS,
 	})
 
 	t.Run("serves index.html at root", func(t *testing.T) {
@@ -43,10 +41,22 @@ func TestSPAFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("serves static files", func(t *testing.T) {
+	t.Run("serves arbitrary asset at top level", func(t *testing.T) {
 		t.Parallel()
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/style.css", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("serves underscore-prefixed SvelteKit asset", func(t *testing.T) {
+		t.Parallel()
+		// SvelteKit emits hashed assets under _app/ — go:embed defaults to
+		// excluding underscore-prefixed paths, so this confirms the all:
+		// prefix on the embed directive includes them.
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_app/immutable/abc.js", nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
 		}
@@ -82,7 +92,7 @@ func TestSPAFallback(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nonexistent", nil))
 		if rec.Code != http.StatusNotFound {
-			t.Fatalf("expected 404, got %d", rec.Code)
+			t.Fatalf("expected 404 (no SPA fallback), got %d", rec.Code)
 		}
 	})
 }
