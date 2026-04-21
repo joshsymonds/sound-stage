@@ -30,5 +30,13 @@ web/build/
 web/storybook-static/
 web/screenshots/
 
+# Nix build output
+/result
+
+# Scratch planning / prompt markdown (already-tracked docs stay tracked)
+*.md
+!CLAUDE.md
+!README.md
+
 # OS
 .DS_Store
