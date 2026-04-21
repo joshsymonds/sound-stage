@@ -21,9 +21,19 @@ type QueueDriver struct {
 	interval time.Duration
 	client   *http.Client
 	logger   *slog.Logger
-	stop     chan struct{}
-	done     chan struct{}
-	once     sync.Once
+	// lifecycle state; all writes go through lifecycleMu. A running driver has
+	// non-nil stop/done; a stopped driver has nil/nil. Idempotency checks read
+	// under the lock, so Start/Stop can be called in any order any number of
+	// times without leaking goroutines.
+	lifecycleMu sync.Mutex
+	stop        chan struct{}
+	done        chan struct{}
+	// tickSem bounds in-flight ticks to 1. When a tick takes longer than the
+	// tick interval, subsequent ticks skip rather than queue up behind it.
+	tickSem chan struct{}
+	// tickWG tracks spawned tick goroutines so Stop can wait for them before
+	// returning.
+	tickWG sync.WaitGroup
 }
 
 // NewQueueDriver returns a driver configured to talk to deckURL, or nil if
@@ -40,6 +50,7 @@ func NewQueueDriver(deckURL string, queue *Queue, interval time.Duration) *Queue
 		interval: interval,
 		client:   newDeckClient(),
 		logger:   slog.Default(),
+		tickSem:  make(chan struct{}, 1),
 	}
 }
 
@@ -47,6 +58,11 @@ const (
 	deckMaxIdleConns        = 4
 	deckMaxIdleConnsPerHost = 2
 	deckIdleConnTimeout     = 90 * time.Second
+	// driverRequestTimeout is intentionally shorter than proxyTimeout (5 s,
+	// used by user-facing playback proxies). The driver ticks every 2 s; a 5 s
+	// per-request timeout would stall multiple ticks on a single slow call.
+	// 1500 ms keeps the tick's worst-case block comfortably under the cadence.
+	driverRequestTimeout = 1500 * time.Millisecond
 )
 
 // newDeckClient builds an http.Client scoped to Deck communication: its own
@@ -54,7 +70,7 @@ const (
 // acts as a backstop if a request ignores its context deadline.
 func newDeckClient() *http.Client {
 	return &http.Client{
-		Timeout: proxyTimeout + time.Second,
+		Timeout: driverRequestTimeout + time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        deckMaxIdleConns,
 			MaxIdleConnsPerHost: deckMaxIdleConnsPerHost,
@@ -63,45 +79,85 @@ func newDeckClient() *http.Client {
 	}
 }
 
-// Start begins ticking in a background goroutine. Safe to call once.
+// Start begins ticking in a background goroutine. Idempotent: a second Start
+// while already running is a no-op.
 func (d *QueueDriver) Start() {
-	d.stop = make(chan struct{})
-	d.done = make(chan struct{})
-	go d.run()
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+	if d.stop != nil {
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	d.stop = stop
+	d.done = done
+	// Pass channels into run by value; never re-read from struct fields in
+	// the goroutine. This side-steps the race where a fast Start→Stop
+	// sequence could clear d.stop before run() observes it.
+	go d.run(stop, done)
 }
 
 // Stop signals the ticker to exit and waits for the goroutine to finish.
-// Idempotent.
+// Idempotent: Stop on a never-started driver is a no-op, and consecutive
+// Stop calls after Start are safe (first closes, subsequent see nil channels).
 func (d *QueueDriver) Stop() {
-	d.once.Do(func() {
-		if d.stop == nil {
-			return
-		}
-		close(d.stop)
-		<-d.done
-	})
+	d.lifecycleMu.Lock()
+	stop, done := d.stop, d.done
+	d.stop, d.done = nil, nil
+	d.lifecycleMu.Unlock()
+
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
+	// Any tick goroutines spawned before the close must drain too.
+	d.tickWG.Wait()
 }
 
-func (d *QueueDriver) run() {
-	defer close(d.done)
+func (d *QueueDriver) run(stop, done chan struct{}) {
+	defer close(done)
+
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-d.stop:
+		case <-stop:
 			return
 		case <-ticker.C:
-			d.tick()
+			d.launchTick()
 		}
 	}
 }
 
-// tick runs one cycle: if the Deck is idle and the queue is non-empty, pops
-// the next entry and stages it via POST /queue. Failures at this layer are
-// logged and, where transient, re-queued.
+// launchTick dispatches tick in a bounded goroutine. If the previous tick is
+// still running when the ticker fires, the new one is skipped (logged at debug)
+// rather than queued — the 2 s cadence matters less than not building backlog
+// under a slow Deck. Stop waits for in-flight ticks via d.tickWG.
+func (d *QueueDriver) launchTick() {
+	select {
+	case d.tickSem <- struct{}{}:
+	default:
+		d.logger.Debug("driver tick skipped; previous still running")
+		return
+	}
+	d.tickWG.Go(func() {
+		defer func() { <-d.tickSem }()
+		d.tick()
+	})
+}
+
+// tick runs one cycle: if the Deck is idle AND has an empty next-up slot,
+// pops the next queued entry and stages it via POST /queue. The slot check
+// prevents the driver from overwriting a staged-but-not-yet-pulled song
+// when two guests queue back-to-back while the Deck waits on ScreenMain.
+// Failures at the stage layer are logged and, where transient, re-queued.
 func (d *QueueDriver) tick() {
 	if d.isDeckBusy() {
+		return
+	}
+	if !d.slotEmpty() {
 		return
 	}
 	entry := d.queue.Next()
@@ -111,12 +167,43 @@ func (d *QueueDriver) tick() {
 	d.stage(entry)
 }
 
+// slotEmpty checks /debug/state for a populated queuedSong. Returns true if
+// the slot is empty (safe to stage). Any network/parse error → false, so the
+// driver backs off rather than risk overwriting an un-pulled song.
+//
+// Depends on /debug/state being available; per API.md that endpoint is
+// "not part of the stable integration surface" but it IS documented and
+// the fake always serves it. When the real USDX moves /debug/state to a
+// different shape, this is the one place to update.
+func (d *QueueDriver) slotEmpty() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), driverRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.deckURL+"/debug/state", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	var state struct {
+		QueuedSong any `json:"queuedSong"`
+	}
+	if decodeErr := json.NewDecoder(io.LimitReader(resp.Body, maxProxyResponse)).Decode(&state); decodeErr != nil {
+		return false
+	}
+	return state.QueuedSong == nil
+}
+
 // isDeckBusy parses GET /now-playing and returns true iff the Deck is
 // actively playing a song. A JSON `null` body means idle. Any network or
 // parse error is treated as "busy" so the driver backs off rather than
 // staging into a possibly-broken Deck.
 func (d *QueueDriver) isDeckBusy() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), proxyTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), driverRequestTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.deckURL+"/now-playing", nil)
@@ -161,7 +248,7 @@ func (d *QueueDriver) stage(entry *QueueEntry) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), proxyTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), driverRequestTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.deckURL+"/queue", bytes.NewReader(body))

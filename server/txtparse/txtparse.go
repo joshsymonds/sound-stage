@@ -17,16 +17,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
 // Song is the minimal metadata subset this package extracts. It intentionally
 // does not carry computed IDs, filesystem paths, or anything else a caller
-// might layer on top.
+// might layer on top. Edition and Year are optional — Parse returns zero
+// values when the corresponding header is absent.
 type Song struct {
-	Artist string
-	Title  string
-	Duet   bool
+	Artist  string
+	Title   string
+	Duet    bool
+	Edition string
+	Year    int
 }
 
 // Parse reads the .txt file at path and extracts its metadata.
@@ -84,5 +88,11 @@ func applyLine(line string, song *Song) {
 		song.Title = val
 	case "DUETSINGERP1", "DUETSINGERP2":
 		song.Duet = true
+	case "EDITION":
+		song.Edition = val
+	case "YEAR":
+		if y, err := strconv.Atoi(val); err == nil {
+			song.Year = y
+		}
 	}
 }

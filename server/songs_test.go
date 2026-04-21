@@ -30,7 +30,7 @@ func TestSongsHandler(t *testing.T) {
 	t.Run("returns empty array for empty directory", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		handler := server.SongsHandler(dir)
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
 		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -57,7 +57,7 @@ func TestSongsHandler(t *testing.T) {
 		writeSongTxt(t, dir, "Queen", "Bohemian Rhapsody")
 		writeSongTxt(t, dir, "ABBA", "Dancing Queen")
 
-		handler := server.SongsHandler(dir)
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
 		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -102,7 +102,7 @@ func TestSongsHandler(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		handler := server.SongsHandler(dir)
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
 		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -121,7 +121,7 @@ func TestSongsHandler(t *testing.T) {
 		dir := t.TempDir()
 		writeSongTxt(t, dir, "ABBA", "Dancing Queen")
 
-		handler := server.SongsHandler(dir)
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
 		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -158,7 +158,7 @@ func TestSongsHandler(t *testing.T) {
 			}
 		}
 
-		handler := server.SongsHandler(dir)
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
 		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -169,6 +169,37 @@ func TestSongsHandler(t *testing.T) {
 		}
 		if len(songs) != 1 {
 			t.Errorf("expected 1 song after collision, got %d", len(songs))
+		}
+	})
+
+	t.Run("LibraryCache avoids rescanning the same directory", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeSongTxt(t, dir, "Queen", "Bohemian Rhapsody")
+
+		cache := server.NewLibraryCache()
+
+		// First call scans; second should return the cached slice without
+		// noticing a new file added to disk.
+		songs1, err := cache.Get(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(songs1) != 1 {
+			t.Fatalf("got %d, want 1", len(songs1))
+		}
+
+		writeSongTxt(t, dir, "ABBA", "Dancing Queen")
+
+		songs2, _ := cache.Get(dir)
+		if len(songs2) != 1 {
+			t.Errorf("cache should still report 1 before Invalidate; got %d", len(songs2))
+		}
+
+		cache.Invalidate()
+		songs3, _ := cache.Get(dir)
+		if len(songs3) != 2 {
+			t.Errorf("after Invalidate, expected 2, got %d", len(songs3))
 		}
 	})
 
@@ -184,7 +215,7 @@ func TestSongsHandler(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		handler := server.SongsHandler(dir)
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
 		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

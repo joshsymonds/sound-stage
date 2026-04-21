@@ -11,13 +11,14 @@ import (
 	"github.com/joshsymonds/sound-stage/server"
 	"github.com/joshsymonds/sound-stage/server/fakeusdx"
 	"github.com/joshsymonds/sound-stage/usdb"
-	"github.com/joshsymonds/sound-stage/ytdlp"
 )
 
-type mockDownloader struct{}
+type mockDownloader struct {
+	youTubeIDs []string
+}
 
 func (m *mockDownloader) GetSongDetails(_ int) (*usdb.SongDetails, error) {
-	return &usdb.SongDetails{Artist: "Test", Title: "Song"}, nil
+	return &usdb.SongDetails{Artist: "Test", Title: "Song", YouTubeIDs: m.youTubeIDs}, nil
 }
 
 func (m *mockDownloader) GetSongTxt(_ int) (string, error) {
@@ -28,6 +29,14 @@ func (m *mockDownloader) DownloadCover(_ int, _ string) error {
 	return nil
 }
 
+// mockYtDlp is a no-op yt-dlp stand-in — its methods return nil without
+// spawning the yt-dlp binary so tests can exercise the full download happy
+// path in-process.
+type mockYtDlp struct{}
+
+func (m *mockYtDlp) DownloadAudio(_, _, _ string) error { return nil }
+func (m *mockYtDlp) DownloadVideo(_, _, _ string) error { return nil }
+
 func TestDownloadHandler(t *testing.T) {
 	t.Parallel()
 
@@ -36,7 +45,7 @@ func TestDownloadHandler(t *testing.T) {
 		outputDir := t.TempDir()
 		handler := server.DownloadHandler(server.DownloadConfig{
 			Client:    &mockDownloader{},
-			YtDlp:     ytdlp.Downloader{},
+			YtDlp:     &mockYtDlp{},
 			OutputDir: outputDir,
 		})
 
@@ -61,6 +70,7 @@ func TestDownloadHandler(t *testing.T) {
 		t.Parallel()
 		handler := server.DownloadHandler(server.DownloadConfig{
 			Client:    &mockDownloader{},
+			YtDlp:     &mockYtDlp{},
 			OutputDir: t.TempDir(),
 		})
 
@@ -77,6 +87,7 @@ func TestDownloadHandler(t *testing.T) {
 		t.Parallel()
 		handler := server.DownloadHandler(server.DownloadConfig{
 			Client:    &mockDownloader{},
+			YtDlp:     &mockYtDlp{},
 			OutputDir: t.TempDir(),
 		})
 
@@ -95,9 +106,12 @@ func TestDownloadHandler(t *testing.T) {
 		defer deck.Close()
 
 		outputDir := t.TempDir()
+		// Mock downloader with a valid-format YouTube ID so runDownload takes
+		// the full-success branch (audio/video → notifyDeck). mockYtDlp
+		// returns nil for the downloads without spawning yt-dlp.
 		handler := server.DownloadHandler(server.DownloadConfig{
-			Client:    &mockDownloader{},
-			YtDlp:     ytdlp.Downloader{},
+			Client:    &mockDownloader{youTubeIDs: []string{"dQw4w9WgXcQ"}},
+			YtDlp:     &mockYtDlp{},
 			OutputDir: outputDir,
 			DeckURL:   deck.URL,
 		})
@@ -136,7 +150,7 @@ func TestDownloadHandler(t *testing.T) {
 		outputDir := t.TempDir()
 		handler := server.DownloadHandler(server.DownloadConfig{
 			Client:    &mockDownloader{},
-			YtDlp:     ytdlp.Downloader{},
+			YtDlp:     &mockYtDlp{},
 			OutputDir: outputDir,
 			DeckURL:   "",
 		})
@@ -156,7 +170,7 @@ func TestDownloadHandler(t *testing.T) {
 		outputDir := t.TempDir()
 		handler := server.DownloadHandler(server.DownloadConfig{
 			Client:    &mockDownloader{},
-			YtDlp:     ytdlp.Downloader{},
+			YtDlp:     &mockYtDlp{},
 			OutputDir: outputDir,
 			DeckURL:   "http://127.0.0.1:1", // unreachable port
 		})

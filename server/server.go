@@ -28,8 +28,12 @@ func Handler(cfg Config) http.Handler {
 func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	mux := http.NewServeMux()
 
+	// Shared library cache: scanned once lazily, invalidated by the download
+	// pipeline when new songs land.
+	libCache := NewLibraryCache()
+
 	// API routes.
-	mux.Handle("GET /api/songs", SongsHandler(cfg.LibraryDir))
+	mux.Handle("GET /api/songs", SongsHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/queue", QueueListHandler(queue))
 	mux.Handle("POST /api/queue", QueueAddHandler(queue))
 	mux.Handle("POST /api/queue/skip", QueueSkipHandler(queue))
@@ -41,7 +45,9 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 
 	// Download trigger (optional — requires USDB client + yt-dlp).
 	if cfg.Download != nil {
-		mux.Handle("POST /api/download", DownloadHandler(*cfg.Download))
+		dl := *cfg.Download
+		dl.InvalidateLibrary = libCache.Invalidate
+		mux.Handle("POST /api/download", DownloadHandler(dl))
 	}
 
 	// Playback proxy to Steam Deck Pascal API.

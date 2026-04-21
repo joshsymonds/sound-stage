@@ -12,27 +12,38 @@ import (
 
 	"github.com/joshsymonds/sound-stage/archive"
 	"github.com/joshsymonds/sound-stage/usdb"
-	"github.com/joshsymonds/sound-stage/ytdlp"
 )
 
-// Downloader abstracts the download pipeline for testing.
+// Downloader abstracts the USDB client for testing.
 type Downloader interface {
 	GetSongDetails(songID int) (*usdb.SongDetails, error)
 	GetSongTxt(songID int) (string, error)
 	DownloadCover(songID int, songDir string) error
 }
 
+// YtDlp abstracts the yt-dlp wrapper for testing. The real implementation is
+// ytdlp.Downloader; tests inject a no-op mock so they can exercise the full
+// download happy path (including notifyDeck) without spawning yt-dlp.
+type YtDlp interface {
+	DownloadAudio(videoURL, destDir, filename string) error
+	DownloadVideo(videoURL, destDir, filename string) error
+}
+
 // DownloadConfig holds configuration for the download handler.
 type DownloadConfig struct {
 	Client    Downloader
-	YtDlp     ytdlp.Downloader
+	YtDlp     YtDlp
 	OutputDir string
 	// DeckURL is the Deck's USDX HTTP API base (e.g. "http://172.31.0.39:9000").
 	// When set, runDownload POSTs /refresh after each successful download so
 	// the Deck's in-memory library picks up the new song immediately.
 	// Empty → skip the notify step.
 	DeckURL string
-	Logger  *slog.Logger
+	// InvalidateLibrary is called after each successful download so a cached
+	// library snapshot (LibraryCache) re-scans on the next GET /api/songs.
+	// Optional — a nil hook is a no-op.
+	InvalidateLibrary func()
+	Logger            *slog.Logger
 }
 
 type downloadRequest struct {
@@ -159,7 +170,13 @@ func runDownload(dlConfig DownloadConfig, songID int, logger *slog.Logger) error
 			return fmt.Errorf("marking downloaded: %w", markErr)
 		}
 
-		notifyDeck(dlConfig.DeckURL, song.TxtPath, logger)
+		// Skip notifyDeck: without audio/video the Deck would accept the
+		// song into its library only to 404 when the user tries to play it.
+		// The archive mark keeps the download handler from retrying this
+		// known-unplayable song, but it stays invisible to the Deck until
+		// a USDB update supplies a YouTube URL and we re-download.
+		// No InvalidateLibrary either — the .txt still exists on disk, but
+		// the library would include an unplayable entry.
 		return nil
 	}
 
@@ -188,6 +205,9 @@ func runDownload(dlConfig DownloadConfig, songID int, logger *slog.Logger) error
 		return fmt.Errorf("marking downloaded: %w", markErr)
 	}
 
+	if dlConfig.InvalidateLibrary != nil {
+		dlConfig.InvalidateLibrary()
+	}
 	notifyDeck(dlConfig.DeckURL, song.TxtPath, logger)
 	return nil
 }

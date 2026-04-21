@@ -9,7 +9,11 @@ import (
 	"time"
 )
 
-const defaultClockInterval = time.Second
+const (
+	defaultClockInterval = time.Second
+	minInjectStatus      = 100
+	maxInjectStatus      = 599
+)
 
 // routeTestHook dispatches /_test/* paths. Called by ServeHTTP when the path
 // matches the /_test/ prefix.
@@ -42,6 +46,8 @@ func (f *Fake) routeTestHook(w http.ResponseWriter, r *http.Request) {
 		f.hookStartClock(w, r)
 	case "stop-clock":
 		f.hookStopClock(w, r)
+	case "inject-status":
+		f.hookInjectStatus(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
@@ -246,6 +252,30 @@ func (f *Fake) hookStopClock(w http.ResponseWriter, r *http.Request) {
 	}
 	f.StopClock()
 	writeJSON(w, http.StatusOK, map[string]bool{"running": false})
+}
+
+func (f *Fake) hookInjectStatus(w http.ResponseWriter, r *http.Request) {
+	obj, ok := parseTestBodyObject(w, r)
+	if !ok {
+		return
+	}
+	endpoint, isStr := obj["endpoint"].(string)
+	if !isStr || endpoint == "" {
+		writeError(w, http.StatusBadRequest, "endpoint required (string)")
+		return
+	}
+	statusF, isNum := obj["status"].(float64)
+	status := int(statusF)
+	if !isNum || status < minInjectStatus || status > maxInjectStatus {
+		writeError(w, http.StatusBadRequest, "status required (100..599)")
+		return
+	}
+	times := 1
+	if t, isFloat := obj["times"].(float64); isFloat && t >= 1 {
+		times = int(t)
+	}
+	f.QueueInjection(endpoint, status, times)
+	writeJSON(w, http.StatusOK, map[string]int{"queued": times})
 }
 
 // --- Auto-clock ---

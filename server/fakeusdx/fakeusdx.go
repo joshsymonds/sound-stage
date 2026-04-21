@@ -81,6 +81,11 @@ type Fake struct {
 	clockInterval   time.Duration
 	clockStop       chan struct{}
 	clockDone       chan struct{}
+	// injections maps an endpoint path to a FIFO queue of status codes; the
+	// next request to that path consumes the head and responds with that
+	// status + a stock {"error":"injected"} body. Populated via POST
+	// /_test/inject-status; drained one entry per matching request.
+	injections map[string][]int
 }
 
 // ErrUnknownSongID is returned when a song ID is not present in the loaded library.
@@ -211,7 +216,49 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	// Test-injected status overrides fire before the real handler, consuming
+	// one entry per request. Allows driving the driver's 5xx branch in tests.
+	if status, injected := f.popInjectionLocked(r.URL.Path); injected {
+		writeError(w, status, "injected")
+		return
+	}
 	handler(w, r)
+}
+
+// popInjectionLocked takes f.mu, pops the head of the injection queue for
+// path if any, and returns (status, true). Returns (0, false) when no
+// injection is pending.
+func (f *Fake) popInjectionLocked(path string) (int, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	queue, ok := f.injections[path]
+	if !ok || len(queue) == 0 {
+		return 0, false
+	}
+	status := queue[0]
+	if len(queue) == 1 {
+		delete(f.injections, path)
+	} else {
+		f.injections[path] = queue[1:]
+	}
+	return status, true
+}
+
+// QueueInjection appends status codes to the override queue for path.
+// Each subsequent request to path consumes one entry. Exposed so /_test/
+// HTTP hooks can drive it and tests can call it directly.
+func (f *Fake) QueueInjection(path string, status int, times int) {
+	if times < 1 {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.injections == nil {
+		f.injections = make(map[string][]int)
+	}
+	for range times {
+		f.injections[path] = append(f.injections[path], status)
+	}
 }
 
 // routeMain returns the handler for a public endpoint path, its allowed

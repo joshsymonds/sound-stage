@@ -2,15 +2,13 @@
 package server
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
+	"sync"
 
 	"github.com/joshsymonds/sound-stage/server/stableid"
 	"github.com/joshsymonds/sound-stage/server/txtparse"
@@ -28,20 +26,72 @@ type Song struct {
 	Year    int    `json:"year,omitempty"`
 }
 
-// SongsHandler returns an http.Handler that scans the library directory
-// and returns a JSON array of songs.
-func SongsHandler(libraryDir string) http.Handler {
+// LibraryCache holds a scanned []Song in memory and invalidates on demand.
+// The first call to Get scans the library directory; subsequent calls return
+// the cached slice without re-reading the filesystem. Invalidate flips the
+// cache stale so the next Get re-scans — call it after downloads complete
+// (via DownloadConfig.InvalidateLibrary).
+//
+// Safe for concurrent use. Reads take an RLock fast path; scans take a
+// write lock with a double-check to avoid concurrent scans.
+type LibraryCache struct {
+	mu     sync.RWMutex
+	songs  []Song
+	loaded bool
+}
+
+// NewLibraryCache returns an empty, unloaded cache.
+func NewLibraryCache() *LibraryCache {
+	return &LibraryCache{}
+}
+
+// Get returns the cached songs, scanning libraryDir on first use.
+func (c *LibraryCache) Get(libraryDir string) ([]Song, error) {
+	c.mu.RLock()
+	if c.loaded {
+		songs := c.songs
+		c.mu.RUnlock()
+		return songs, nil
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.loaded {
+		return c.songs, nil
+	}
+	songs, err := scanLibrary(libraryDir)
+	if err != nil {
+		return nil, err
+	}
+	c.songs = songs
+	c.loaded = true
+	return c.songs, nil
+}
+
+// Invalidate marks the cache stale so the next Get rescans libraryDir.
+// Call this after a successful download or any operation that changes the
+// on-disk library.
+func (c *LibraryCache) Invalidate() {
+	c.mu.Lock()
+	c.songs, c.loaded = nil, false
+	c.mu.Unlock()
+}
+
+// SongsHandler returns an http.Handler that serves the library via the given
+// cache. Empty library returns [].
+func SongsHandler(cache *LibraryCache, libraryDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		songs, scanErr := scanLibrary(libraryDir)
-		if scanErr != nil {
-			slog.Error("scanning library", "error", scanErr)
+		songs, err := cache.Get(libraryDir)
+		if err != nil {
+			slog.Default().Error("scanning library", "error", err)
 			http.Error(w, "failed to scan library", http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if encodeErr := json.NewEncoder(w).Encode(songs); encodeErr != nil {
-			slog.Error("encoding songs response", "error", encodeErr)
+			slog.Default().Error("encoding songs response", "error", encodeErr)
 		}
 	})
 }
@@ -88,51 +138,12 @@ func parseSongFile(path string) (Song, error) {
 		return Song{}, fmt.Errorf("parse: %w", err)
 	}
 
-	edition, year := readOptionalHeaders(path)
-
 	return Song{
 		ID:      stableid.Compute(parsed.Artist, parsed.Title, parsed.Duet),
 		Title:   parsed.Title,
 		Artist:  parsed.Artist,
 		Duet:    parsed.Duet,
-		Edition: edition,
-		Year:    year,
+		Edition: parsed.Edition,
+		Year:    parsed.Year,
 	}, nil
-}
-
-// readOptionalHeaders extracts #EDITION and #YEAR from the .txt header block.
-// Streams with a bufio.Scanner and exits at the first non-# line so we don't
-// pull the (typically 10-100 KB) notes section into memory for every song.
-// Missing values return "" and 0; errors are swallowed — the song is still
-// usable without them.
-func readOptionalHeaders(path string) (edition string, year int) {
-	file, err := os.Open(path) //nolint:gosec // path constructed from library dir + entry name
-	if err != nil {
-		return "", 0
-	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "#") {
-			return edition, year
-		}
-		colon := strings.IndexByte(line, ':')
-		if colon < 0 {
-			continue
-		}
-		key := strings.ToUpper(strings.TrimSpace(line[1:colon]))
-		val := strings.TrimSpace(line[colon+1:])
-		switch key {
-		case "EDITION":
-			edition = val
-		case "YEAR":
-			y, convErr := strconv.Atoi(val)
-			if convErr == nil {
-				year = y
-			}
-		}
-	}
-	return edition, year
 }

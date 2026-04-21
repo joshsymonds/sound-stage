@@ -460,6 +460,83 @@ func TestClock_StopIsIdempotent(t *testing.T) {
 	}
 }
 
+// --- /_test/inject-status ---
+
+func TestInjectStatusHook_Happy(t *testing.T) {
+	fake := fakeusdx.New()
+	rec, body := testHookPost(t, fake, "/_test/inject-status", map[string]any{
+		"endpoint": "/queue",
+		"status":   504,
+		"times":    1,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("hook status = %d, body=%s", rec.Code, body)
+	}
+
+	// First POST /queue should return 504 (injected); second should succeed normally.
+	id := seedFake(fake)
+	rec2, body2 := postQueueJSON(t, fake, map[string]any{
+		"songId":    id,
+		"requester": "Alice",
+	})
+	if rec2.Code != http.StatusGatewayTimeout {
+		t.Errorf("first /queue status = %d, want 504 (injected); body=%s", rec2.Code, body2)
+	}
+
+	rec3, _ := postQueueJSON(t, fake, map[string]any{
+		"songId":    id,
+		"requester": "Alice",
+	})
+	if rec3.Code != http.StatusOK {
+		t.Errorf("second /queue status = %d, want 200 (injection consumed)", rec3.Code)
+	}
+}
+
+func TestInjectStatusHook_Sequence(t *testing.T) {
+	fake := fakeusdx.New()
+	id := seedFake(fake)
+	if rec, _ := testHookPost(t, fake, "/_test/inject-status", map[string]any{
+		"endpoint": "/queue",
+		"status":   500,
+		"times":    3,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("hook setup: %d", rec.Code)
+	}
+
+	// Three injected 500s, then success on the fourth.
+	want := []int{500, 500, 500, 200}
+	for i, expectedStatus := range want {
+		rec, _ := postQueueJSON(t, fake, map[string]any{
+			"songId":    id,
+			"requester": "Alice",
+		})
+		if rec.Code != expectedStatus {
+			t.Errorf("request %d: status = %d, want %d", i+1, rec.Code, expectedStatus)
+		}
+	}
+}
+
+func TestInjectStatusHook_MissingEndpoint(t *testing.T) {
+	fake := fakeusdx.New()
+	rec, _ := testHookPost(t, fake, "/_test/inject-status", map[string]any{
+		"status": 500,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestInjectStatusHook_OutOfRangeStatus(t *testing.T) {
+	fake := fakeusdx.New()
+	rec, _ := testHookPost(t, fake, "/_test/inject-status", map[string]any{
+		"endpoint": "/queue",
+		"status":   99,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestClock_StartIsIdempotent(t *testing.T) {
 	fake := fakeusdx.New()
 	fake.SetClockInterval(10 * time.Millisecond)
