@@ -47,6 +47,7 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	if cfg.Download != nil {
 		dl := *cfg.Download
 		dl.InvalidateLibrary = libCache.Invalidate
+		dl.Queue = queue
 		mux.Handle("POST /api/download", DownloadHandler(dl))
 	}
 

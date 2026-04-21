@@ -122,16 +122,16 @@ describe("API client", () => {
     await expect(searchUSDB({ title: "test" })).rejects.toThrow("search USDB");
   });
 
-  it("triggerDownload calls POST /api/download", async () => {
+  it("triggerDownload calls POST /api/download with songId and guest", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(JSON.stringify({ status: "downloading" }), { status: 202 }),
     );
 
-    const status = await triggerDownload(12_345);
+    const status = await triggerDownload(12_345, "Alice");
     expect(fetch).toHaveBeenCalledWith("/api/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ songId: 12_345 }),
+      body: JSON.stringify({ songId: 12_345, guest: "Alice" }),
     });
     expect(status).toBe("downloading");
   });
@@ -141,6 +141,6 @@ describe("API client", () => {
       new Response("error", { status: 400 }),
     );
 
-    await expect(triggerDownload(0)).rejects.toThrow("trigger download");
+    await expect(triggerDownload(0, "Alice")).rejects.toThrow("trigger download");
   });
 });

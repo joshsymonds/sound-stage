@@ -55,11 +55,11 @@ export async function searchUSDB(params: { artist?: string; title?: string; edit
   return response.json() as Promise<USDBResult[]>;
 }
 
-export async function triggerDownload(songId: number): Promise<string> {
+export async function triggerDownload(songId: number, guest: string): Promise<string> {
   const response = await fetch("/api/download", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ songId }),
+    body: JSON.stringify({ songId, guest }),
   });
   if (!response.ok) {
     throw new Error(`Failed to trigger download: ${String(response.status)}`);

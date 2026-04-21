@@ -129,10 +129,12 @@
   }
 
   async function handleDownloadAndQueue(result: USDBResult): Promise<void> {
+    if (!guestName) return;
     if (downloadingIds.has(result.id)) return;
     downloadingIds = new Set([...downloadingIds, result.id]);
     try {
-      await triggerDownload(result.id);
+      await triggerDownload(result.id, guestName);
+      activeTab = "queue";
     } catch {
       showError("Download failed");
     }

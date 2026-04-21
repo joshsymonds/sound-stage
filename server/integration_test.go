@@ -228,6 +228,84 @@ func nowPlayingID(t *testing.T, appURL string) string {
 	return np.ID
 }
 
+// TestEndToEnd_DownloadAutoQueue verifies the full HTTP wiring of the
+// auto-queue path: a POST /api/download against a real http.Server with a
+// real DownloadConfig (mock USDB + mock yt-dlp + fake USDX) results in the
+// requesting guest's name appearing in GET /api/queue.
+//
+// This is the "production wiring" check that the unit-level
+// TestDownloadAutoQueue can't make: it confirms that server.HandlerWithQueue
+// correctly threads the shared *Queue into the DownloadConfig.
+func TestEndToEnd_DownloadAutoQueue(t *testing.T) {
+	fake := fakeusdx.New()
+	deckSrv := httptest.NewServer(fake)
+	defer deckSrv.Close()
+
+	queue := server.NewQueue()
+	libraryDir := t.TempDir()
+	appHandler := server.HandlerWithQueue(server.Config{
+		LibraryDir: libraryDir,
+		DeckURL:    deckSrv.URL,
+		Download: &server.DownloadConfig{
+			Client:    &mockDownloader{youTubeIDs: []string{"dQw4w9WgXcQ"}},
+			YtDlp:     &mockYtDlp{},
+			OutputDir: libraryDir,
+			DeckURL:   deckSrv.URL,
+		},
+	}, queue)
+	appSrv := httptest.NewServer(appHandler)
+	defer appSrv.Close()
+
+	body := bytes.NewReader([]byte(`{"songId": 99999, "guest": "Alice"}`))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, appSrv.URL+"/api/download", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/download: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /api/download: status = %d, want 202", resp.StatusCode)
+	}
+
+	// Poll GET /api/queue until the entry shows up.
+	expectedID := stableid.Compute("Test", "Song", false)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		entries := fetchQueueEntries(t, appSrv.URL)
+		if len(entries) == 1 && entries[0].Guest == "Alice" && entries[0].Song.ID == expectedID {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("queue never received Alice's song with id %s", expectedID)
+}
+
+// fetchQueueEntries does GET /api/queue and decodes the response.
+func fetchQueueEntries(t *testing.T, appURL string) []server.QueueEntry {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, appURL+"/api/queue", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/queue: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/queue: %d", resp.StatusCode)
+	}
+	var entries []server.QueueEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		t.Fatalf("decode queue: %v", err)
+	}
+	return entries
+}
+
 // dumpFakeState returns the fake's /debug/state as a string (best-effort;
 // empty on error). Used only for test failure messages.
 func dumpFakeState(t *testing.T, deckURL string) string {
