@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -474,32 +473,5 @@ func TestClock_StartIsIdempotent(t *testing.T) {
 	fake.StopClock()
 	if fake.Screen() != fakeusdx.ScreenMain {
 		t.Errorf("screen changed unexpectedly: %q", fake.Screen())
-	}
-}
-
-// --- Grep check: ensure /_test/ only appears in fakeusdx package ---
-
-func TestTestHooks_PathPrefixConsistent(t *testing.T) {
-	// This is a sanity check encoded as a test: all test-hook paths begin
-	// with /_test/. If a future handler lands outside that prefix, the
-	// grep check in the epic will still catch it, but this pins the
-	// naming convention.
-	paths := []string{
-		"/_test/set-screen",
-		"/_test/advance-elapsed",
-		"/_test/press-sing",
-		"/_test/press-enter",
-		"/_test/press-esc",
-		"/_test/load-songs",
-		"/_test/set-current-playing",
-		"/_test/set-idle",
-		"/_test/set-default-duration",
-		"/_test/start-clock",
-		"/_test/stop-clock",
-	}
-	for _, p := range paths {
-		if !strings.HasPrefix(p, "/_test/") {
-			t.Errorf("path %q doesn't start with /_test/", p)
-		}
 	}
 }

@@ -1,6 +1,9 @@
 package server
 
-import "sync"
+import (
+	"slices"
+	"sync"
+)
 
 // QueueEntry represents a song in the queue with its position and guest.
 type QueueEntry struct {
@@ -19,8 +22,8 @@ type guestEntry struct {
 // Safe for concurrent access.
 type Queue struct {
 	mu         sync.Mutex
-	guestOrder []string                // order in which guests first appeared
-	guestSongs map[string][]guestEntry // per-guest FIFO sub-queues
+	guestOrder []string                // order in which guests first appeared — monotonic, never shrinks
+	guestSongs map[string][]guestEntry // per-guest FIFO sub-queues; empty sub-queues are removed
 }
 
 // NewQueue creates a new empty queue.
@@ -35,27 +38,33 @@ func (q *Queue) Add(song Song, guest string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// Track guest order by first appearance.
-	if _, exists := q.guestSongs[guest]; !exists {
-		q.guestOrder = append(q.guestOrder, guest)
-	}
-
+	q.ensureGuestOrderLocked(guest)
 	q.guestSongs[guest] = append(q.guestSongs[guest], guestEntry{song: song, guest: guest})
 }
 
 // ReAdd prepends a song to a guest's sub-queue — used by the queue driver
 // when a stage attempt fails transiently (409/5xx) and the song needs to be
 // retried before other entries from the same guest move ahead of it.
+// The guest's round-robin position is preserved: even if their sub-queue had
+// emptied between Next and ReAdd, their original turn order is unchanged.
 func (q *Queue) ReAdd(song Song, guest string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if _, exists := q.guestSongs[guest]; !exists {
-		q.guestOrder = append(q.guestOrder, guest)
-	}
-
+	q.ensureGuestOrderLocked(guest)
 	entry := guestEntry{song: song, guest: guest}
 	q.guestSongs[guest] = append([]guestEntry{entry}, q.guestSongs[guest]...)
+}
+
+// ensureGuestOrderLocked adds guest to guestOrder if not already present.
+// Caller must hold q.mu. guestOrder is monotonic — an entry that appears
+// here is never removed, so a guest whose sub-queue empties and later
+// re-fills (via ReAdd or a fresh Add) retains their original turn order.
+func (q *Queue) ensureGuestOrderLocked(guest string) {
+	if slices.Contains(q.guestOrder, guest) {
+		return
+	}
+	q.guestOrder = append(q.guestOrder, guest)
 }
 
 // List returns the round-robin interleaved queue with positions and isNext.
@@ -68,6 +77,8 @@ func (q *Queue) List() []QueueEntry {
 
 func (q *Queue) listLocked() []QueueEntry {
 	// Build interleaved list: take one song from each guest per round.
+	// Guests with empty sub-queues contribute nothing; they stay in
+	// guestOrder so their position is preserved if they re-queue later.
 	var entries []QueueEntry
 	round := 0
 
@@ -110,14 +121,13 @@ func (q *Queue) Next() *QueueEntry {
 
 	first := entries[0]
 
-	// Remove the first song from this guest's sub-queue.
+	// Remove the first song from this guest's sub-queue. Leave guestOrder
+	// alone so the guest keeps their position if they re-queue.
 	songs := q.guestSongs[first.Guest]
-	q.guestSongs[first.Guest] = songs[1:]
-
-	// Clean up empty guest entries.
-	if len(q.guestSongs[first.Guest]) == 0 {
+	if len(songs) > 1 {
+		q.guestSongs[first.Guest] = songs[1:]
+	} else {
 		delete(q.guestSongs, first.Guest)
-		q.guestOrder = removeFromSlice(q.guestOrder, first.Guest)
 	}
 
 	return &first
@@ -153,17 +163,7 @@ func (q *Queue) Remove(position int) bool {
 
 	if len(q.guestSongs[target.Guest]) == 0 {
 		delete(q.guestSongs, target.Guest)
-		q.guestOrder = removeFromSlice(q.guestOrder, target.Guest)
 	}
 
 	return true
-}
-
-func removeFromSlice(slice []string, val string) []string {
-	for i, v := range slice {
-		if v == val {
-			return append(slice[:i], slice[i+1:]...)
-		}
-	}
-	return slice
 }

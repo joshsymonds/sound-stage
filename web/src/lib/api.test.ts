@@ -65,6 +65,7 @@ describe("API client", () => {
         songId: "deadbeef00000001",
         title: "Bohemian Rhapsody",
         artist: "Queen",
+        duet: undefined,
         edition: undefined,
         year: 1975,
         guest: "Alice",

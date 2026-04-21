@@ -68,13 +68,20 @@ func (f *Fake) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := os.Stat(path)
+	// Lstat (not Stat) so symlinks don't silently resolve — an attacker who
+	// could place a .txt symlink on the host could otherwise exfiltrate
+	// arbitrary file contents via the #ARTIST/#TITLE fields in /songs.
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeAddedFalseError(w, http.StatusNotFound, "path not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		writeAddedFalseError(w, http.StatusBadRequest, "path must not be a symlink")
 		return
 	}
 	if info.IsDir() {

@@ -183,6 +183,33 @@ func TestQueue(t *testing.T) {
 		}
 	})
 
+	t.Run("ReAdd preserves guest position across emptied sub-queue", func(t *testing.T) {
+		t.Parallel()
+		q := server.NewQueue()
+		// Alice appears first.
+		q.Add(song(1, "A1"), "Alice")
+		// Bob appears second, after Alice's song is popped (Alice's sub-queue is empty now).
+		if entry := q.Next(); entry == nil || entry.Guest != "Alice" {
+			t.Fatalf("Next: %+v, want Alice's A1", entry)
+		}
+		q.Add(song(2, "B1"), "Bob")
+		// Alice's stage fails — driver re-queues.
+		q.ReAdd(song(1, "A1"), "Alice")
+
+		entries := q.List()
+		if len(entries) != 2 {
+			t.Fatalf("got %d entries, want 2", len(entries))
+		}
+		// Alice should still be at position 1 (round-robin order preserved
+		// because guestOrder didn't drop her when her sub-queue emptied).
+		if entries[0].Guest != "Alice" {
+			t.Errorf("position 1 = %s, want Alice (her original round-robin slot)", entries[0].Guest)
+		}
+		if entries[1].Guest != "Bob" {
+			t.Errorf("position 2 = %s, want Bob", entries[1].Guest)
+		}
+	})
+
 	t.Run("guest order is preserved by insertion order", func(t *testing.T) {
 		t.Parallel()
 		q := server.NewQueue()

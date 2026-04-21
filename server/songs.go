@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -100,17 +101,22 @@ func parseSongFile(path string) (Song, error) {
 }
 
 // readOptionalHeaders extracts #EDITION and #YEAR from the .txt header block.
-// These are not required; missing values return "" and 0. Errors are swallowed
-// — the song is still usable without them.
+// Streams with a bufio.Scanner and exits at the first non-# line so we don't
+// pull the (typically 10-100 KB) notes section into memory for every song.
+// Missing values return "" and 0; errors are swallowed — the song is still
+// usable without them.
 func readOptionalHeaders(path string) (edition string, year int) {
-	data, err := os.ReadFile(path) //nolint:gosec // path constructed from library dir + entry name
+	file, err := os.Open(path) //nolint:gosec // path constructed from library dir + entry name
 	if err != nil {
 		return "", 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
+	defer func() { _ = file.Close() }()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "#") {
-			break
+			return edition, year
 		}
 		colon := strings.IndexByte(line, ':')
 		if colon < 0 {

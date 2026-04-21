@@ -22,7 +22,9 @@ import (
 const shutdownTimeout = 5 * time.Second
 
 func main() {
-	addr := flag.String("addr", ":9000", "TCP bind address")
+	addr := flag.String("addr", "127.0.0.1:9000",
+		"TCP bind address; defaults to localhost. Pass :9000 to expose on LAN "+
+			"(only on trusted networks — /refresh reads arbitrary .txt paths)")
 	seedPath := flag.String("seed", "", "optional path to a JSON array of {title,artist,duet} songs")
 	flag.Parse()
 

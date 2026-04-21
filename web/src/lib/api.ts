@@ -31,6 +31,7 @@ export async function addToQueue(song: Song, guest: string): Promise<void> {
       songId: song.id,
       title: song.title,
       artist: song.artist,
+      duet: song.duet,
       edition: song.edition,
       year: song.year,
       guest,
