@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addToQueue, fetchQueue, fetchSongs, searchUSDB, skipQueue, triggerDownload } from "./api";
+import { addToQueue, fetchQueue, fetchSongs, searchUSDB, triggerDownload } from "./api";
 import type { QueueEntry, Song } from "./types";
 
 const mockSongs: Song[] = [
@@ -79,25 +79,6 @@ describe("API client", () => {
     );
 
     await expect(addToQueue(mockSongs[0]!, "Alice")).rejects.toThrow("add to queue");
-  });
-
-  it("skipQueue calls POST /api/queue/skip and returns entry", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(JSON.stringify(mockQueue[0]), { status: 200 }),
-    );
-
-    const entry = await skipQueue();
-    expect(fetch).toHaveBeenCalledWith("/api/queue/skip", { method: "POST" });
-    expect(entry?.song.title).toBe("Bohemian Rhapsody");
-  });
-
-  it("skipQueue returns null on 204", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response(null, { status: 204 }),
-    );
-
-    const entry = await skipQueue();
-    expect(entry).toBeNull();
   });
 
   it("searchUSDB calls GET /api/usdb/search with query params", async () => {

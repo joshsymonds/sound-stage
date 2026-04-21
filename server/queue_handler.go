@@ -63,17 +63,3 @@ func QueueAddHandler(queue *Queue) http.Handler {
 		json.NewEncoder(w).Encode(resp) //nolint:gosec // best-effort response encoding
 	})
 }
-
-// QueueSkipHandler pops the next song from the queue and returns it.
-func QueueSkipHandler(queue *Queue) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		entry := queue.Next()
-		if entry == nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(entry) //nolint:gosec // best-effort response encoding
-	})
-}

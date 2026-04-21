@@ -71,45 +71,4 @@ func TestQueueHandlers(t *testing.T) {
 			t.Fatalf("expected 400, got %d", rec.Code)
 		}
 	})
-
-	t.Run("POST /api/queue/skip returns next song", func(t *testing.T) {
-		t.Parallel()
-		q := server.NewQueue()
-		q.Add(server.Song{ID: "deadbeef00000001", Title: "First", Artist: "A"}, "Alice")
-		q.Add(server.Song{ID: "deadbeef00000002", Title: "Second", Artist: "B"}, "Bob")
-
-		handler := server.QueueSkipHandler(q)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/queue/skip", nil))
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-
-		var entry server.QueueEntry
-		if err := json.Unmarshal(rec.Body.Bytes(), &entry); err != nil {
-			t.Fatal(err)
-		}
-		if entry.Song.Title != "First" {
-			t.Errorf("expected First, got %s", entry.Song.Title)
-		}
-
-		// Queue should now have 1 entry.
-		remaining := q.List()
-		if len(remaining) != 1 {
-			t.Fatalf("expected 1 remaining, got %d", len(remaining))
-		}
-	})
-
-	t.Run("POST /api/queue/skip on empty returns 204", func(t *testing.T) {
-		t.Parallel()
-		q := server.NewQueue()
-		handler := server.QueueSkipHandler(q)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/queue/skip", nil))
-
-		if rec.Code != http.StatusNoContent {
-			t.Fatalf("expected 204, got %d", rec.Code)
-		}
-	})
 }

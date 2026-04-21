@@ -84,13 +84,3 @@ export async function resumePlayback(): Promise<void> {
   await fetch("/api/playback/resume", { method: "POST" });
 }
 
-export async function skipQueue(): Promise<QueueEntry | null> {
-  const response = await fetch("/api/queue/skip", { method: "POST" });
-  if (response.status === 204) {
-    return null;
-  }
-  if (!response.ok) {
-    throw new Error(`Failed to skip queue: ${String(response.status)}`);
-  }
-  return response.json() as Promise<QueueEntry>;
-}

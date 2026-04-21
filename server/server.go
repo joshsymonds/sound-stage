@@ -36,7 +36,6 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	mux.Handle("GET /api/songs", SongsHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/queue", QueueListHandler(queue))
 	mux.Handle("POST /api/queue", QueueAddHandler(queue))
-	mux.Handle("POST /api/queue/skip", QueueSkipHandler(queue))
 
 	// USDB search proxy (optional — requires credentials).
 	if cfg.Searcher != nil {
