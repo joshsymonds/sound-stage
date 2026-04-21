@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,7 +27,12 @@ type DownloadConfig struct {
 	Client    Downloader
 	YtDlp     ytdlp.Downloader
 	OutputDir string
-	Logger    *slog.Logger
+	// DeckURL is the Deck's USDX HTTP API base (e.g. "http://172.31.0.39:9000").
+	// When set, runDownload POSTs /refresh after each successful download so
+	// the Deck's in-memory library picks up the new song immediately.
+	// Empty → skip the notify step.
+	DeckURL string
+	Logger  *slog.Logger
 }
 
 type downloadRequest struct {
@@ -152,6 +159,7 @@ func runDownload(dlConfig DownloadConfig, songID int, logger *slog.Logger) error
 			return fmt.Errorf("marking downloaded: %w", markErr)
 		}
 
+		notifyDeck(dlConfig.DeckURL, song.TxtPath, logger)
 		return nil
 	}
 
@@ -180,5 +188,47 @@ func runDownload(dlConfig DownloadConfig, songID int, logger *slog.Logger) error
 		return fmt.Errorf("marking downloaded: %w", markErr)
 	}
 
+	notifyDeck(dlConfig.DeckURL, song.TxtPath, logger)
 	return nil
+}
+
+// notifyDeck POSTs /refresh to the Deck so its in-memory library picks up
+// the newly-downloaded song. Best-effort: failures log a warning but don't
+// interrupt the caller — the download itself succeeded regardless.
+func notifyDeck(deckURL, txtPath string, logger *slog.Logger) {
+	if deckURL == "" {
+		return
+	}
+
+	body, err := json.Marshal(map[string]string{"path": txtPath})
+	if err != nil {
+		logger.Warn("marshal /refresh payload", "error", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), proxyTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, deckURL+"/refresh", bytes.NewReader(body))
+	if err != nil {
+		logger.Warn("build /refresh request", "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Warn("deck unreachable for /refresh", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		logger.Warn("deck /refresh returned non-200",
+			"status", resp.StatusCode,
+			"path", txtPath,
+		)
+		return
+	}
+	logger.Debug("deck accepted /refresh", "path", txtPath)
 }

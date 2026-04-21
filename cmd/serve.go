@@ -64,6 +64,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 				Client:    client,
 				YtDlp:     ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight},
 				OutputDir: outputDir,
+				DeckURL:   serveDeckURL,
 			}
 			fmt.Fprintln(os.Stderr, "USDB search and download enabled")
 		}

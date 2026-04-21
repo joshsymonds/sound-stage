@@ -15,9 +15,12 @@ export interface QueueEntry {
   isNext: boolean;
 }
 
+// NowPlayingState matches the USDX API.md shape for GET /now-playing.
+// When not on ScreenSing with active audio, the endpoint returns null.
 export interface NowPlayingState {
-  song: Song;
-  singer: string;
+  id: string;
+  title: string;
+  artist: string;
   elapsed: number;
   duration: number;
 }

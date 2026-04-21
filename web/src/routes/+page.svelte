@@ -170,9 +170,8 @@
   <AppShell {activeTab} onnavigate={handleNavigate}>
     {#if activeTab === "playing"}
       <NowPlaying
-        title={nowPlaying?.song.title}
-        artist={nowPlaying?.song.artist}
-        singer={nowPlaying?.singer}
+        title={nowPlaying?.title}
+        artist={nowPlaying?.artist}
         elapsed={nowPlaying?.elapsed}
         duration={nowPlaying?.duration}
         {paused}
