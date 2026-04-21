@@ -43,6 +43,21 @@ func (q *Queue) Add(song Song, guest string) {
 	q.guestSongs[guest] = append(q.guestSongs[guest], guestEntry{song: song, guest: guest})
 }
 
+// ReAdd prepends a song to a guest's sub-queue — used by the queue driver
+// when a stage attempt fails transiently (409/5xx) and the song needs to be
+// retried before other entries from the same guest move ahead of it.
+func (q *Queue) ReAdd(song Song, guest string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if _, exists := q.guestSongs[guest]; !exists {
+		q.guestOrder = append(q.guestOrder, guest)
+	}
+
+	entry := guestEntry{song: song, guest: guest}
+	q.guestSongs[guest] = append([]guestEntry{entry}, q.guestSongs[guest]...)
+}
+
 // List returns the round-robin interleaved queue with positions and isNext.
 func (q *Queue) List() []QueueEntry {
 	q.mu.Lock()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/joshsymonds/sound-stage/usdb"
 	"github.com/joshsymonds/sound-stage/ytdlp"
 )
+
+const queueDriverInterval = 2 * time.Second
 
 var (
 	servePort       string
@@ -69,9 +72,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 	queue := server.NewQueue()
 	srv := server.NewWithQueue(cfg, queue)
 
-	if cfg.DeckURL != "" {
-		fmt.Fprintf(os.Stderr, "Deck API: %s\n", cfg.DeckURL)
+	driver := server.NewQueueDriver(cfg.DeckURL, queue, queueDriverInterval)
+	if driver != nil {
+		fmt.Fprintf(os.Stderr, "Deck queue driver: %s (tick %s)\n", cfg.DeckURL, queueDriverInterval)
+		driver.Start()
 	}
+
 	if cfg.DelyricURL != "" {
 		fmt.Fprintf(os.Stderr, "Delyric worker: %s\n", cfg.DelyricURL)
 	}
@@ -88,6 +94,9 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}()
 
 	<-stop
+	if driver != nil {
+		driver.Stop()
+	}
 	fmt.Fprintln(os.Stderr, "shutting down")
 	return nil
 }
