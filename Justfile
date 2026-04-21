@@ -106,5 +106,11 @@ screenshot-all:
 serve-dev: build-web
     go run . serve --static web/build --port 8080
 
+# ── USDX stand-in ────────────────────────────────────────────
+
+# Run the USDX stand-in on :9000 (interactive dev without the Deck)
+fake-deck *ARGS:
+    go run ./cmd/fake-usdx {{ARGS}}
+
 # Run all checks (Go + web)
 check-all: check check-web
