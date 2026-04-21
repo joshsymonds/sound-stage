@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addToQueue, fetchQueue, fetchSongs, searchUSDB, triggerDownload } from "./api";
+import { addToQueue, fetchQueue, fetchSongs, removeFromQueue, searchUSDB, triggerDownload } from "./api";
 import type { QueueEntry, Song } from "./types";
 
 const mockSongs: Song[] = [
@@ -123,5 +123,31 @@ describe("API client", () => {
     );
 
     await expect(triggerDownload(0, "Alice")).rejects.toThrow("trigger download");
+  });
+
+  it("removeFromQueue calls DELETE /api/queue/N?guest=NAME", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(null, { status: 204 }),
+    );
+
+    await removeFromQueue(2, "Alice");
+    expect(fetch).toHaveBeenCalledWith("/api/queue/2?guest=Alice", { method: "DELETE" });
+  });
+
+  it("removeFromQueue url-encodes the guest name", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(null, { status: 204 }),
+    );
+
+    await removeFromQueue(1, "Alice & Bob");
+    expect(fetch).toHaveBeenCalledWith("/api/queue/1?guest=Alice%20%26%20Bob", { method: "DELETE" });
+  });
+
+  it("removeFromQueue throws on non-OK response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("forbidden", { status: 403 }),
+    );
+
+    await expect(removeFromQueue(1, "Bob")).rejects.toThrow("remove from queue");
   });
 });

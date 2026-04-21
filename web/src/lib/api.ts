@@ -84,3 +84,12 @@ export async function resumePlayback(): Promise<void> {
   await fetch("/api/playback/resume", { method: "POST" });
 }
 
+export async function removeFromQueue(position: number, guest: string): Promise<void> {
+  const response = await fetch(`/api/queue/${String(position)}?guest=${encodeURIComponent(guest)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to remove from queue: ${String(response.status)}`);
+  }
+}
+

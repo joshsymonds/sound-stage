@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import QueueItem from "./QueueItem.svelte";
 
@@ -37,5 +37,40 @@ describe("QueueItem", () => {
       props: { position: 42, title: "Test", artist: "Test", guest: "Charlie" },
     });
     expect(screen.getByText("42")).toBeInTheDocument();
+  });
+
+  it("renders a remove button when onremove is provided", () => {
+    render(QueueItem, {
+      props: {
+        position: 1,
+        title: "Test",
+        artist: "Test",
+        guest: "Alice",
+        onremove: vi.fn(),
+      },
+    });
+    expect(screen.getByLabelText("Remove your song")).toBeInTheDocument();
+  });
+
+  it("does not render a remove button when onremove is omitted", () => {
+    render(QueueItem, {
+      props: { position: 1, title: "Test", artist: "Test", guest: "Alice" },
+    });
+    expect(screen.queryByLabelText("Remove your song")).toBeNull();
+  });
+
+  it("calls onremove when the remove button is clicked", async () => {
+    const onremove = vi.fn();
+    render(QueueItem, {
+      props: {
+        position: 3,
+        title: "Test",
+        artist: "Test",
+        guest: "Alice",
+        onremove,
+      },
+    });
+    await fireEvent.click(screen.getByLabelText("Remove your song"));
+    expect(onremove).toHaveBeenCalledTimes(1);
   });
 });

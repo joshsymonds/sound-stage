@@ -5,6 +5,7 @@
     fetchQueue,
     fetchSongs,
     pausePlayback,
+    removeFromQueue,
     resumePlayback,
     searchUSDB,
     triggerDownload,
@@ -140,6 +141,16 @@
     }
   }
 
+  async function handleRemove(position: number): Promise<void> {
+    if (!guestName) return;
+    try {
+      await removeFromQueue(position, guestName);
+      await poll();
+    } catch {
+      showError("Failed to remove song");
+    }
+  }
+
   async function handlePause(): Promise<void> {
     await pausePlayback();
     paused = true;
@@ -191,6 +202,9 @@
                 artist={entry.song.artist}
                 guest={entry.guest}
                 isNext={entry.isNext}
+                onremove={entry.guest === guestName
+                  ? () => void handleRemove(entry.position)
+                  : undefined}
               />
             {/each}
           </div>
@@ -214,6 +228,9 @@
                 artist={entry.song.artist}
                 guest={entry.guest}
                 isNext={entry.isNext}
+                onremove={entry.guest === guestName
+                  ? () => void handleRemove(entry.position)
+                  : undefined}
               />
             {/each}
           </div>
