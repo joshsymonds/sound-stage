@@ -15,9 +15,13 @@
           config.allowUnfree = true;
         }));
   in {
-    packages = forAllSystems (pkgs: {
+    packages = forAllSystems (pkgs: rec {
       delyric-worker = pkgs.callPackage ./nix/delyric-worker.nix {};
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.delyric-worker;
+      sound-stage-web = pkgs.callPackage ./nix/sound-stage-web.nix {};
+      sound-stage-server = pkgs.callPackage ./nix/sound-stage-server.nix {
+        inherit sound-stage-web;
+      };
+      default = sound-stage-server;
     });
   };
 }
