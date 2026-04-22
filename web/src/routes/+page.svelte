@@ -43,6 +43,17 @@
   const SEARCH_DEBOUNCE_MS = 300;
   const SEARCH_MIN_CHARS = 2;
 
+  // Library filter is client-side and instant — no debounce. Songs is at most
+  // a few thousand entries; substring match across title + artist is cheap.
+  const filteredSongs = $derived.by(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (q.length < SEARCH_MIN_CHARS) return songs;
+    return songs.filter(
+      (s) => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q),
+    );
+  });
+  const isSearching = $derived(searchQuery.trim().length >= SEARCH_MIN_CHARS);
+
   function showError(message: string): void {
     errorMessage = message;
     setTimeout(() => { errorMessage = null; }, 4000);
@@ -292,14 +303,16 @@
         </div>
 
         <div class="section-head" style="margin-top: var(--space-md);">
-          <div class="section-label">In your library</div>
+          <div class="section-label">
+            {isSearching ? "Library matches" : "In your library"}
+          </div>
           <div class="section-sub">Plays instantly</div>
         </div>
         {#if loadingSongs}
           <div class="empty-prompt"><p>Loading…</p></div>
-        {:else if songs.length > 0}
+        {:else if filteredSongs.length > 0}
           <div class="list">
-            {#each songs as song (song.id)}
+            {#each filteredSongs as song (song.id)}
               <SongCard
                 title={song.title}
                 artist={song.artist}
@@ -310,30 +323,38 @@
               />
             {/each}
           </div>
+        {:else if isSearching}
+          <div class="empty-prompt"><p>No library matches for &ldquo;{searchQuery}&rdquo;.</p></div>
         {:else}
           <div class="empty-prompt">
             <p>Nothing downloaded yet. Search above to grab a song.</p>
           </div>
         {/if}
 
-        {#if searchResults.length > 0}
+        {#if isSearching}
           <div class="section-head" style="margin-top: var(--space-lg);">
             <div class="section-label">From the USDB catalog</div>
             <div class="section-sub">Tap to download (~30s) and queue</div>
           </div>
-          <div class="list">
-            {#each searchResults as result (result.id)}
-              <SongCard
-                title={result.title}
-                artist={result.artist}
-                coverUrl={"/api/usdb/cover/" + String(result.id)}
-                onclick={() => void handleDownloadAndQueue(result)}
-              />
-              {#if downloadingIds.has(result.id)}
-                <div class="download-status">Downloading…</div>
-              {/if}
-            {/each}
-          </div>
+          {#if searching && searchResults.length === 0}
+            <div class="empty-prompt"><p>Searching USDB…</p></div>
+          {:else if searchResults.length > 0}
+            <div class="list">
+              {#each searchResults as result (result.id)}
+                <SongCard
+                  title={result.title}
+                  artist={result.artist}
+                  coverUrl={"/api/usdb/cover/" + String(result.id)}
+                  onclick={() => void handleDownloadAndQueue(result)}
+                />
+                {#if downloadingIds.has(result.id)}
+                  <div class="download-status">Downloading…</div>
+                {/if}
+              {/each}
+            </div>
+          {:else}
+            <div class="empty-prompt"><p>No USDB matches.</p></div>
+          {/if}
         {/if}
       </div>
     {/if}
