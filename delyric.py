@@ -8,6 +8,7 @@ instrumental and vocal tracks from existing audio.webm files.
 import concurrent.futures
 import logging
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,11 @@ LOG_FILENAME = "delyric-errors.log"
 SEPARATOR_TIMEOUT = 600  # 10 minutes per song for GPU separation
 FFMPEG_TIMEOUT = 120  # 2 minutes per encode
 
+# Abort after this many consecutive failures — catches environmental breakage
+# (e.g. a Nix GC that deletes the venv's python mid-run) before it silently
+# burns through the queue producing 1000+ identical FileNotFoundError entries.
+MAX_CONSECUTIVE_FAILURES = 5
+
 logger = logging.getLogger("delyric")
 
 
@@ -46,12 +52,48 @@ def is_processed(song_dir: Path) -> bool:
     return (song_dir / "instrumental.webm").exists() and (song_dir / "vocals.webm").exists()
 
 
+def resolve_audio_separator() -> str:
+    """Resolve audio-separator to an absolute path and verify it actually runs.
+
+    A bare `audio-separator` subprocess call will fail with FileNotFoundError not
+    only when the binary is missing but also when its shebang target has been
+    garbage-collected out of the Nix store — the failure is instant, so a long
+    run can silently churn through thousands of songs logging identical errors.
+    Resolve at startup and probe with --help so we detect breakage loudly
+    before processing begins. --help is used instead of a feature-specific
+    flag because it's universal and only verifies the interpreter can start.
+    """
+    path = shutil.which("audio-separator")
+    if path is None:
+        raise RuntimeError(
+            "audio-separator not found on PATH. Enter the devenv shell "
+            "(direnv allow / devenv shell) to rebuild the venv."
+        )
+    try:
+        subprocess.run(
+            [path, "--help"],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        raise RuntimeError(
+            f"audio-separator at {path} is broken (likely a GC'd Nix store "
+            f"dependency). Delete .devenv/state/delyric-venv and re-enter "
+            f"the devenv shell to rebuild. Underlying error: {exc}"
+        ) from exc
+    return path
+
+
+AUDIO_SEPARATOR = None  # Populated at startup by main() before any processing.
+
+
 def separate_song(song_dir: Path, tmpdir: Path) -> tuple[Path, Path]:
     """Run ensemble separation on audio.webm, return paths to vocals and instrumental WAVs."""
     audio_path = song_dir / "audio.webm"
 
     cmd = [
-        "audio-separator",
+        AUDIO_SEPARATOR,
         str(audio_path),
         "--model_filename", PRIMARY_MODEL,
         "--extra_models", ENSEMBLE_MODEL,
@@ -224,10 +266,17 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, l
                 click.echo(f"  {s.name}")
         return
 
+    # Resolve and probe audio-separator BEFORE touching any songs — if the venv
+    # is broken we want to know now, not 1000 failures later.
+    global AUDIO_SEPARATOR
+    AUDIO_SEPARATOR = resolve_audio_separator()
+
     click.echo(f"Processing {to_process} songs ({skipped} already done)")
 
     processed = 0
     failed = 0
+    consecutive_failures = 0
+    aborted = False
 
     with tqdm(unprocessed, unit="song", desc="Separating") as pbar:
         for song_dir in pbar:
@@ -235,15 +284,27 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, l
             try:
                 process_song(song_dir)
                 processed += 1
+                consecutive_failures = 0
             except Exception:
                 failed += 1
+                consecutive_failures += 1
                 logger.exception("Failed to process %s", song_dir.name)
                 tqdm.write(f"  FAILED: {song_dir.name} (see {LOG_FILENAME})")
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    aborted = True
+                    tqdm.write(
+                        f"  ABORTING: {MAX_CONSECUTIVE_FAILURES} consecutive "
+                        f"failures — environment likely broken. See {log_path}."
+                    )
+                    break
 
     click.echo()
-    click.echo(f"Done: {processed} processed, {skipped} skipped, {failed} failed")
+    status = "Aborted" if aborted else "Done"
+    click.echo(f"{status}: {processed} processed, {skipped} skipped, {failed} failed")
     if failed > 0:
         click.echo(f"Error details in: {log_path}")
+    if aborted:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

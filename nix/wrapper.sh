@@ -7,6 +7,7 @@ SRC_DIR="@srcDir@"
 PYTHON="@python@"
 FFMPEG_BIN="@ffmpegBin@"
 NATIVE_LIBS="@nativeLibs@"
+BUILD_TOOLS="@buildToolsBin@"
 
 : "${DELYRIC_STATE_DIR:?DELYRIC_STATE_DIR must be set (systemd StateDirectory)}"
 
@@ -32,8 +33,10 @@ elif [ ! -f "${REQ_HASH_FILE}" ] || [ "$(cat "${REQ_HASH_FILE}")" != "${NEW_HASH
 fi
 
 if [ "${needs_install}" = "1" ]; then
-  "${VENV}/bin/pip" install --quiet --upgrade pip
-  "${VENV}/bin/pip" install --quiet -r "${REQ_FILE}"
+  # Prepend build tools so transitive sdists (uvloop, etc.) can compile C.
+  # --prefer-binary picks wheels when available to minimize compilation surface.
+  PATH="${BUILD_TOOLS}:${PATH:-}" "${VENV}/bin/pip" install --quiet --upgrade pip
+  PATH="${BUILD_TOOLS}:${PATH:-}" "${VENV}/bin/pip" install --quiet --prefer-binary -r "${REQ_FILE}"
   echo "${NEW_HASH}" > "${REQ_HASH_FILE}"
 fi
 
