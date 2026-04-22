@@ -51,9 +51,14 @@
   .app-shell {
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
-    min-height: 100dvh;
+    /* Use exact viewport height (not min-height) so the inner .content
+       overflow:auto contains the scroll instead of pushing .nav off-screen.
+       min-height would let the column grow past the viewport when content
+       is tall, defeating the bottom-nav anchor. */
+    height: 100vh;
+    height: 100dvh;
     background: var(--color-bg);
+    overflow: hidden;
   }
 
   .header {
@@ -75,6 +80,9 @@
 
   .content {
     flex: 1;
+    /* min-height: 0 is the classic fix that lets a flex child actually
+       scroll instead of growing to its intrinsic content height. */
+    min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
