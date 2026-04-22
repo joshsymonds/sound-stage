@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,12 +23,13 @@ func TestQueueHandlers(t *testing.T) {
 			t.Fatalf("expected 200, got %d", rec.Code)
 		}
 
-		var entries []server.QueueEntry
-		if err := json.Unmarshal(rec.Body.Bytes(), &entries); err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) != 0 {
-			t.Fatalf("expected 0 entries, got %d", len(entries))
+		// Assert the literal wire format. json.Unmarshal happily accepts
+		// "null" into a []T (yielding nil with len 0), which is exactly the
+		// trap that bit production: the web client expects QueueEntry[] and
+		// crashes on null.length.
+		body := strings.TrimSpace(rec.Body.String())
+		if body != "[]" {
+			t.Fatalf("expected body %q, got %q", "[]", body)
 		}
 	})
 

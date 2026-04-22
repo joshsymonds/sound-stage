@@ -35,6 +35,11 @@ func USDBSearchHandler(searcher USDBSearcher) http.Handler {
 			http.Error(w, "USDB search failed", http.StatusBadGateway)
 			return
 		}
+		// Coerce nil → [] so the wire format is always an array; the web
+		// client casts the response to USDBResult[] and would crash on null.
+		if results == nil {
+			results = []usdb.Song{}
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(results) //nolint:gosec // best-effort response encoding

@@ -68,11 +68,17 @@ func (q *Queue) ensureGuestOrderLocked(guest string) {
 }
 
 // List returns the round-robin interleaved queue with positions and isNext.
+// Always returns a non-nil slice — an empty queue gives []QueueEntry{} so
+// the JSON encoder writes "[]" rather than "null", which would crash any
+// client that expects an array (the web client at QueueEntry[] does).
 func (q *Queue) List() []QueueEntry {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	return q.listLocked()
+	if entries := q.listLocked(); entries != nil {
+		return entries
+	}
+	return []QueueEntry{}
 }
 
 func (q *Queue) listLocked() []QueueEntry {

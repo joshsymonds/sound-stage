@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/joshsymonds/sound-stage/server"
@@ -57,6 +58,25 @@ func TestUSDBSearchHandler(t *testing.T) {
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+	})
+
+	t.Run("returns literal [] when no results", func(t *testing.T) {
+		t.Parallel()
+		// Searcher returns nil — same shape as a no-match search. Body must
+		// be the literal "[]", not "null", so the web client (which expects
+		// USDBResult[]) doesn't crash on .length.
+		searcher := &mockSearcher{results: nil}
+		handler := server.USDBSearchHandler(searcher)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/usdb/search?title=nothing", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		body := strings.TrimSpace(rec.Body.String())
+		if body != "[]" {
+			t.Fatalf("expected body %q, got %q", "[]", body)
 		}
 	})
 
