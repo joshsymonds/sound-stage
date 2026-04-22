@@ -17,3 +17,9 @@ export function setGuestName(name: string): void {
   const trimmed = name.trim();
   document.cookie = `${COOKIE_NAME}=${encodeURIComponent(trimmed)}; path=/; max-age=${String(MAX_AGE)}; SameSite=Lax`;
 }
+
+export function clearGuestName(): void {
+  // max-age=0 expires the cookie immediately. SameSite must match the
+  // original write or some browsers won't accept the deletion.
+  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+}

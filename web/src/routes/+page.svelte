@@ -19,7 +19,7 @@
   import NowPlaying from "$lib/components/NowPlaying.svelte";
   import QueueItem from "$lib/components/QueueItem.svelte";
   import SongCard from "$lib/components/SongCard.svelte";
-  import { getGuestName, setGuestName } from "$lib/stores/session";
+  import { clearGuestName, getGuestName, setGuestName } from "$lib/stores/session";
   import type { NowPlayingState, QueueEntry, Song } from "$lib/types";
   import { onMount } from "svelte";
 
@@ -112,6 +112,10 @@
   function handleJoin(name: string): void {
     setGuestName(name);
     guestName = name;
+    // Polling may have been stopped by a previous self-remove ("leave the
+    // party"). Restart it idempotently — startPolling is a no-op if already
+    // running thanks to the stopPolling call inside it.
+    startPolling();
   }
 
   async function loadSongs(): Promise<void> {
@@ -202,11 +206,24 @@
   }
 
   async function handleRemovePerson(name: string, count: number): Promise<void> {
+    const isMe = name === guestName;
     const songWord = count === 1 ? "song" : "songs";
-    const ok = window.confirm(`Remove all ${String(count)} of ${name}'s ${songWord} from the queue?`);
-    if (!ok) return;
+    const message = isMe
+      ? `Leave the party? Your ${String(count)} queued ${songWord} will be removed.`
+      : `Remove all ${String(count)} of ${name}'s ${songWord} from the queue?`;
+    if (!window.confirm(message)) return;
     try {
       await removeAllByGuest(name);
+      if (isMe) {
+        // Leaving the party: clear session so the app reverts to NameEntry.
+        // Stop polling first; the next poll would otherwise try to render
+        // queue state for a guestName we just cleared.
+        stopPolling();
+        clearGuestName();
+        guestName = null;
+        activeTab = "playing";
+        return;
+      }
       await poll();
     } catch {
       showError("Failed to remove " + name);

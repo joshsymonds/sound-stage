@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { getGuestName, setGuestName } from "./session";
+import { clearGuestName, getGuestName, setGuestName } from "./session";
 
 describe("session store", () => {
   afterEach(() => {
@@ -35,5 +35,12 @@ describe("session store", () => {
   it("trims whitespace from names", () => {
     setGuestName("  Alice  ");
     expect(getGuestName()).toBe("Alice");
+  });
+
+  it("clearGuestName removes the stored cookie", () => {
+    setGuestName("Alice");
+    expect(getGuestName()).toBe("Alice");
+    clearGuestName();
+    expect(getGuestName()).toBeNull();
   });
 });
