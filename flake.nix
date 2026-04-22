@@ -23,5 +23,14 @@
       };
       default = sound-stage-server;
     });
+
+    nixosModules.default = {
+      pkgs,
+      lib,
+      ...
+    }: {
+      imports = [./nix/module.nix];
+      services.sound-stage.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.sound-stage-server;
+    };
   };
 }
