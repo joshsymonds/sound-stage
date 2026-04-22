@@ -29,6 +29,7 @@ func SetStaticFS(f fs.FS) {
 
 var (
 	servePort       string
+	serveBindAddr   string
 	serveDeckURL    string
 	serveDelyricURL string
 )
@@ -44,6 +45,10 @@ and provides API endpoints for the karaoke queue system.`,
 func init() {
 	serveCmd.Flags().StringVar(&servePort, "port", "8080", "HTTP server port")
 	serveCmd.Flags().StringVar(
+		&serveBindAddr, "bind", "127.0.0.1",
+		"address to bind the listener (loopback by default; Caddy fronts on :443)",
+	)
+	serveCmd.Flags().StringVar(
 		&serveDeckURL, "deck-url", "",
 		"Steam Deck Pascal API base URL (e.g. http://172.31.0.39:9000)",
 	)
@@ -56,11 +61,12 @@ func init() {
 
 func runServe(_ *cobra.Command, _ []string) error {
 	cfg := server.Config{
-		Port:       servePort,
-		LibraryDir: outputDir,
-		StaticFS:   staticFS,
-		DeckURL:    serveDeckURL,
-		DelyricURL: serveDelyricURL,
+		Port:        servePort,
+		BindAddress: serveBindAddr,
+		LibraryDir:  outputDir,
+		StaticFS:    staticFS,
+		DeckURL:     serveDeckURL,
+		DelyricURL:  serveDelyricURL,
 	}
 
 	// Set up USDB search and download if credentials are available.
@@ -102,7 +108,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	signal.Notify(stop, os.Interrupt)
 
 	go func() {
-		fmt.Fprintf(os.Stderr, "SoundStage server starting on :%s (library: %s)\n", cfg.Port, cfg.LibraryDir)
+		fmt.Fprintf(os.Stderr,
+			"SoundStage server starting on %s:%s (library: %s)\n",
+			cfg.BindAddress, cfg.Port, cfg.LibraryDir,
+		)
 		if err := srv.ListenAndServe(); err != nil {
 			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(1)

@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -157,10 +158,9 @@ func TestQueue(t *testing.T) {
 		q.Add(song(2, "B1"), "Bob")
 		q.Add(song(3, "A2"), "Alice")
 
-		// Remove position 2 (B1 in round-robin: A1, B1, A2).
-		ok := q.Remove(2)
-		if !ok {
-			t.Fatal("expected Remove to return true")
+		// Remove position 2 (B1 in round-robin: A1, B1, A2). Owner is Bob.
+		if err := q.Remove(2, "Bob"); err != nil {
+			t.Fatalf("expected Remove to succeed, got %v", err)
 		}
 
 		entries := q.List()
@@ -174,12 +174,59 @@ func TestQueue(t *testing.T) {
 		}
 	})
 
-	t.Run("Remove invalid position returns false", func(t *testing.T) {
+	t.Run("Remove invalid position returns ErrPositionOutOfRange", func(t *testing.T) {
 		t.Parallel()
 		q := server.NewQueue()
 		q.Add(song(1, "A1"), "Alice")
-		if q.Remove(99) {
-			t.Error("expected Remove(99) to return false")
+		if err := q.Remove(99, "Alice"); !errors.Is(err, server.ErrPositionOutOfRange) {
+			t.Errorf("expected ErrPositionOutOfRange, got %v", err)
+		}
+	})
+
+	t.Run("Remove rejects guest mismatch with ErrNotYourSong", func(t *testing.T) {
+		t.Parallel()
+		q := server.NewQueue()
+		q.Add(song(1, "A1"), "Alice")
+		if err := q.Remove(1, "Bob"); !errors.Is(err, server.ErrNotYourSong) {
+			t.Errorf("expected ErrNotYourSong, got %v", err)
+		}
+		// Queue must be unchanged.
+		if got := len(q.List()); got != 1 {
+			t.Errorf("queue length = %d, want 1 (unchanged)", got)
+		}
+	})
+
+	t.Run("Remove is race-safe under concurrent Next", func(t *testing.T) {
+		t.Parallel()
+		// Reproduces the closed race: Alice@1, Bob@2. A concurrent Next()
+		// pops Alice between an Alice-authorized Remove(2)'s position
+		// resolution and the actual mutation. Pre-fix this could remove
+		// Bob's song; post-fix the owner check inside the lock catches it.
+		for i := range 200 {
+			q := server.NewQueue()
+			q.Add(song(1, "A1"), "Alice")
+			q.Add(song(2, "B1"), "Bob")
+
+			done := make(chan struct{}, 2)
+			go func() { _ = q.Next(); done <- struct{}{} }()
+			go func() { _ = q.Remove(2, "Alice"); done <- struct{}{} }()
+			<-done
+			<-done
+
+			// Bob's song must still be in the queue under any interleaving:
+			// either Alice's Remove succeeded against the post-Next list (now
+			// only Bob — but Bob's owner ≠ Alice → rejected), or Next ran
+			// after and popped Alice. Either way Bob survives.
+			entries := q.List()
+			for _, e := range entries {
+				if e.Song.Title == "B1" {
+					goto next // Bob present — race-safe
+				}
+			}
+			if len(entries) > 0 {
+				t.Fatalf("iter %d: Bob's song removed; queue = %+v", i, entries)
+			}
+		next:
 		}
 	})
 

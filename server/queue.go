@@ -1,8 +1,15 @@
 package server
 
 import (
+	"errors"
 	"slices"
 	"sync"
+)
+
+// Remove sentinel errors. The handler uses these to render 403 vs 404.
+var (
+	ErrPositionOutOfRange = errors.New("position out of range")
+	ErrNotYourSong        = errors.New("not your song")
 )
 
 // QueueEntry represents a song in the queue with its position and guest.
@@ -155,17 +162,27 @@ func (q *Queue) RemoveByGuest(guest string) int {
 	return len(songs)
 }
 
-// Remove removes the entry at the given 1-indexed position. Returns true if removed.
-func (q *Queue) Remove(position int) bool {
+// Remove removes the entry at the given 1-indexed position when its guest
+// matches expectedGuest. Owner check happens INSIDE the lock so a
+// concurrent Next() (which would shift positions) cannot let an authorized
+// caller delete a different guest's song.
+//
+// Returns ErrPositionOutOfRange if no entry exists at that position;
+// ErrNotYourSong if the entry exists but belongs to a different guest;
+// nil on successful removal.
+func (q *Queue) Remove(position int, expectedGuest string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	entries := q.listLocked()
 	if position < 1 || position > len(entries) {
-		return false
+		return ErrPositionOutOfRange
 	}
 
 	target := entries[position-1]
+	if target.Guest != expectedGuest {
+		return ErrNotYourSong
+	}
 
 	// Find and remove this song from the guest's sub-queue.
 	songs := q.guestSongs[target.Guest]
@@ -178,7 +195,7 @@ func (q *Queue) Remove(position int) bool {
 	}
 
 	if idx == -1 {
-		return false
+		return ErrPositionOutOfRange
 	}
 
 	q.guestSongs[target.Guest] = append(songs[:idx], songs[idx+1:]...)
@@ -187,5 +204,5 @@ func (q *Queue) Remove(position int) bool {
 		delete(q.guestSongs, target.Guest)
 	}
 
-	return true
+	return nil
 }

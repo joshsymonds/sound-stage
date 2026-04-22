@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 )
@@ -101,20 +102,19 @@ func QueueRemoveHandler(queue *Queue) http.Handler {
 			return
 		}
 
-		entries := queue.List()
-		if position > len(entries) {
-			http.Error(w, "position out of range", http.StatusNotFound)
-			return
-		}
-		if entries[position-1].Guest != guest {
+		// Owner check happens INSIDE Queue.Remove under the queue lock —
+		// no snapshot-then-mutate race window where a concurrent Next()
+		// could shift positions between auth and removal.
+		removeErr := queue.Remove(position, guest)
+		switch {
+		case errors.Is(removeErr, ErrNotYourSong):
 			http.Error(w, "not your song", http.StatusForbidden)
 			return
-		}
-		// Race: between List and Remove, the queue could shift (e.g.,
-		// QueueDriver pops). Treat a remove miss as 404 — from the user's
-		// vantage point, the entry they tried to delete is no longer there.
-		if !queue.Remove(position) {
+		case errors.Is(removeErr, ErrPositionOutOfRange):
 			http.Error(w, "position out of range", http.StatusNotFound)
+			return
+		case removeErr != nil:
+			http.Error(w, "internal", http.StatusInternalServerError)
 			return
 		}
 

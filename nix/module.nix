@@ -42,7 +42,17 @@ in {
     port = mkOption {
       type = types.str;
       default = "8080";
-      description = "TCP port the HTTP server binds (loopback only).";
+      description = "TCP port the HTTP server binds.";
+    };
+
+    bindAddress = mkOption {
+      type = types.str;
+      default = "127.0.0.1";
+      description = ''
+        Host the listener binds to. Defaults to loopback so the API is
+        only reachable through the fronting reverse proxy. Set to
+        "0.0.0.0" to expose on all interfaces (rarely correct).
+      '';
     };
 
     deckURL = mkOption {
@@ -109,6 +119,7 @@ in {
         ExecStart =
           "${cfg.package}/bin/sound-stage --output ${cfg.libraryDir} serve "
           + "--port ${cfg.port} "
+          + "--bind ${cfg.bindAddress} "
           + "--deck-url ${cfg.deckURL}"
           + optionalString (cfg.delyricURL != "") " --delyric-url ${cfg.delyricURL}";
 

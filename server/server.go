@@ -10,8 +10,13 @@ import (
 
 // Config holds the server configuration.
 type Config struct {
-	Port       string
-	LibraryDir string
+	Port string
+	// BindAddress is the host the listener binds to. Empty defaults to
+	// "127.0.0.1" — the service is meant to sit behind Caddy on the same
+	// host, so loopback-only is the right default. Set to "0.0.0.0" to
+	// expose on all interfaces (rarely correct).
+	BindAddress string
+	LibraryDir  string
 	// StaticFS holds the SPA assets to serve at /. In production, this is the
 	// embed.FS sub-tree wired in main.go. Tests pass an fstest.MapFS. A nil
 	// StaticFS disables the SPA route entirely (API-only mode).
@@ -111,8 +116,12 @@ func New(cfg Config) *http.Server {
 func NewWithQueue(cfg Config, queue *Queue) *http.Server {
 	const readHeaderTimeout = 10 * time.Second
 
+	bindAddr := cfg.BindAddress
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
 	return &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              bindAddr + ":" + cfg.Port,
 		Handler:           HandlerWithQueue(cfg, queue),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
