@@ -206,28 +206,47 @@
   }
 
   async function handleRemovePerson(name: string, count: number): Promise<void> {
-    const isMe = name === guestName;
+    if (name === guestName) {
+      await leaveParty(count);
+      return;
+    }
     const songWord = count === 1 ? "song" : "songs";
-    const message = isMe
-      ? `Leave the party? Your ${String(count)} queued ${songWord} will be removed.`
-      : `Remove all ${String(count)} of ${name}'s ${songWord} from the queue?`;
-    if (!window.confirm(message)) return;
+    if (!window.confirm(`Remove all ${String(count)} of ${name}'s ${songWord} from the queue?`)) {
+      return;
+    }
     try {
       await removeAllByGuest(name);
-      if (isMe) {
-        // Leaving the party: clear session so the app reverts to NameEntry.
-        // Stop polling first; the next poll would otherwise try to render
-        // queue state for a guestName we just cleared.
-        stopPolling();
-        clearGuestName();
-        guestName = null;
-        activeTab = "playing";
-        return;
-      }
       await poll();
     } catch {
       showError("Failed to remove " + name);
     }
+  }
+
+  async function leaveParty(songCount: number): Promise<void> {
+    if (!guestName) return;
+    const message = songCount > 0
+      ? `Leave the party? Your ${String(songCount)} queued ${songCount === 1 ? "song" : "songs"} will be removed.`
+      : `Leave the party as ${guestName}?`;
+    if (!window.confirm(message)) return;
+    try {
+      // Always call removeAllByGuest — server is idempotent if zero songs
+      // belong to this guest, so callers don't need to branch on count.
+      await removeAllByGuest(guestName);
+    } catch {
+      showError("Failed to leave the party");
+      return;
+    }
+    // Clear local session; stop polling first so the next tick doesn't try
+    // to render queue state for a name we just cleared.
+    stopPolling();
+    clearGuestName();
+    guestName = null;
+    activeTab = "playing";
+  }
+
+  function handleLeavePartyClick(): void {
+    const myCount = partyPeople.find((p) => p.name === guestName)?.count ?? 0;
+    void leaveParty(myCount);
   }
 
   async function handlePause(): Promise<void> {
@@ -264,10 +283,27 @@
   {/if}
 {/snippet}
 
+{#snippet identityBadge()}
+  <button
+    type="button"
+    class="identity-badge"
+    onclick={handleLeavePartyClick}
+    aria-label="Leave the party"
+  >
+    <span class="identity-name">{guestName}</span>
+    <span class="identity-leave" aria-hidden="true">Leave</span>
+  </button>
+{/snippet}
+
 {#if guestName === null}
   <NameEntry onsubmit={handleJoin} />
 {:else}
-  <AppShell {activeTab} onnavigate={handleNavigate} banner={deckOfflineBanner}>
+  <AppShell
+    {activeTab}
+    onnavigate={handleNavigate}
+    banner={deckOfflineBanner}
+    headerEnd={identityBadge}
+  >
     {#if activeTab === "playing"}
       <NowPlaying
         title={nowPlaying?.title}
@@ -462,6 +498,45 @@
     font-size: 0.6875rem;
     color: var(--color-text-muted);
     letter-spacing: 0.02em;
+  }
+
+  .identity-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-full);
+    color: var(--color-text);
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: color var(--transition-normal), border-color var(--transition-normal),
+      box-shadow var(--transition-normal);
+  }
+
+  .identity-badge:hover,
+  .identity-badge:focus-visible {
+    border-color: var(--color-pink);
+    box-shadow: var(--glow-pink);
+    outline: none;
+  }
+
+  .identity-name {
+    font-weight: 600;
+  }
+
+  .identity-leave {
+    color: var(--color-text-muted);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .identity-badge:hover .identity-leave,
+  .identity-badge:focus-visible .identity-leave {
+    color: var(--color-pink);
   }
 
   .people-chips {

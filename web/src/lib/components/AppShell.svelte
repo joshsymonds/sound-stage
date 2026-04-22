@@ -5,11 +5,13 @@
     activeTab = "playing",
     onnavigate,
     banner,
+    headerEnd,
     children,
   }: {
     activeTab?: "playing" | "queue" | "browse";
     onnavigate?: (tab: string) => void;
     banner?: Snippet;
+    headerEnd?: Snippet;
     children: Snippet;
   } = $props();
 
@@ -27,6 +29,11 @@
 
   <header class="header">
     <span class="logo">SoundStage</span>
+    {#if headerEnd}
+      <span class="header-end">
+        {@render headerEnd()}
+      </span>
+    {/if}
   </header>
 
   <main class="content">
@@ -68,6 +75,16 @@
     padding: var(--space-md);
     border-bottom: 1px solid var(--color-border-subtle);
     flex-shrink: 0;
+    position: relative;
+  }
+
+  .header-end {
+    position: absolute;
+    right: var(--space-md);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
   }
 
   .logo {
