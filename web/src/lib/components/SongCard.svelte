@@ -16,6 +16,13 @@
   } = $props();
 
   let interactive = $derived(onclick !== undefined);
+  let imgFailed = $state(false);
+  // Reset failure state when the URL changes (e.g., new search renders the
+  // same component slot for a different result).
+  $effect(() => {
+    coverUrl;
+    imgFailed = false;
+  });
 </script>
 
 <button
@@ -26,8 +33,14 @@
   disabled={!interactive}
 >
   <div class="cover">
-    {#if coverUrl}
-      <img src={coverUrl} alt="{artist} — {title}" class="cover-img" />
+    {#if coverUrl && !imgFailed}
+      <img
+        src={coverUrl}
+        alt="{artist} — {title}"
+        class="cover-img"
+        loading="lazy"
+        onerror={() => (imgFailed = true)}
+      />
     {:else}
       <div class="cover-placeholder">
         <span class="cover-icon">&#9835;</span>

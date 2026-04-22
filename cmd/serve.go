@@ -70,6 +70,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 			fmt.Fprintf(os.Stderr, "USDB login failed (search/download disabled): %v\n", err)
 		} else {
 			cfg.Searcher = client
+			cfg.CoverFetcher = client
 			cfg.Download = &server.DownloadConfig{
 				Client:    client,
 				YtDlp:     ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight},

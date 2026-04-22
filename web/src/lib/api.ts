@@ -47,13 +47,16 @@ export async function addToQueue(song: Song, guest: string): Promise<void> {
   }
 }
 
-export async function searchUSDB(params: { artist?: string; title?: string; edition?: string }): Promise<USDBResult[]> {
+export async function searchUSDB(
+  params: { artist?: string; title?: string; edition?: string },
+  signal?: AbortSignal,
+): Promise<USDBResult[]> {
   const query = new URLSearchParams();
   if (params.artist) query.set("artist", params.artist);
   if (params.title) query.set("title", params.title);
   if (params.edition) query.set("edition", params.edition);
 
-  const response = await fetch(`/api/usdb/search?${query.toString()}`);
+  const response = await fetch(`/api/usdb/search?${query.toString()}`, { signal });
   if (!response.ok) {
     throw new Error(`Failed to search USDB: ${String(response.status)}`);
   }

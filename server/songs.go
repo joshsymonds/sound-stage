@@ -26,17 +26,18 @@ type Song struct {
 	Year    int    `json:"year,omitempty"`
 }
 
-// LibraryCache holds a scanned []Song in memory and invalidates on demand.
-// The first call to Get scans the library directory; subsequent calls return
-// the cached slice without re-reading the filesystem. Invalidate flips the
-// cache stale so the next Get re-scans — call it after downloads complete
-// (via DownloadConfig.InvalidateLibrary).
+// LibraryCache holds a scanned []Song in memory plus a stableid → song-dir
+// map for cover lookups. Invalidates on demand: the first Get scans the
+// library directory; subsequent calls return the cached slice without
+// re-reading the filesystem. Invalidate flips the cache stale so the next
+// Get re-scans — call it after downloads complete.
 //
 // Safe for concurrent use. Reads take an RLock fast path; scans take a
 // write lock with a double-check to avoid concurrent scans.
 type LibraryCache struct {
 	mu     sync.RWMutex
 	songs  []Song
+	paths  map[string]string // stableid → absolute song directory
 	loaded bool
 }
 
@@ -60,13 +61,26 @@ func (c *LibraryCache) Get(libraryDir string) ([]Song, error) {
 	if c.loaded {
 		return c.songs, nil
 	}
-	songs, err := scanLibrary(libraryDir)
+	songs, paths, err := scanLibrary(libraryDir)
 	if err != nil {
 		return nil, err
 	}
 	c.songs = songs
+	c.paths = paths
 	c.loaded = true
 	return c.songs, nil
+}
+
+// Path returns the absolute directory for the song with the given stableid,
+// or false if the cache hasn't loaded yet or the id isn't present.
+func (c *LibraryCache) Path(id string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.loaded {
+		return "", false
+	}
+	dir, ok := c.paths[id]
+	return dir, ok
 }
 
 // Invalidate marks the cache stale so the next Get rescans libraryDir.
@@ -74,7 +88,7 @@ func (c *LibraryCache) Get(libraryDir string) ([]Song, error) {
 // on-disk library.
 func (c *LibraryCache) Invalidate() {
 	c.mu.Lock()
-	c.songs, c.loaded = nil, false
+	c.songs, c.paths, c.loaded = nil, nil, false
 	c.mu.Unlock()
 }
 
@@ -96,14 +110,15 @@ func SongsHandler(cache *LibraryCache, libraryDir string) http.Handler {
 	})
 }
 
-func scanLibrary(dir string) ([]Song, error) {
+func scanLibrary(dir string) ([]Song, map[string]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading library directory: %w", err)
+		return nil, nil, fmt.Errorf("reading library directory: %w", err)
 	}
 
 	logger := slog.Default()
 	songs := make([]Song, 0, len(entries))
+	paths := make(map[string]string, len(entries))
 	seenIDs := make(map[string]string, len(entries))
 
 	for _, entry := range entries {
@@ -111,7 +126,8 @@ func scanLibrary(dir string) ([]Song, error) {
 			continue
 		}
 
-		txtPath := filepath.Join(dir, entry.Name(), "song.txt")
+		songDir := filepath.Join(dir, entry.Name())
+		txtPath := filepath.Join(songDir, "song.txt")
 		song, parseErr := parseSongFile(txtPath)
 		if parseErr != nil {
 			continue
@@ -126,10 +142,11 @@ func scanLibrary(dir string) ([]Song, error) {
 			continue
 		}
 		seenIDs[song.ID] = txtPath
+		paths[song.ID] = songDir
 		songs = append(songs, song)
 	}
 
-	return songs, nil
+	return songs, paths, nil
 }
 
 func parseSongFile(path string) (Song, error) {

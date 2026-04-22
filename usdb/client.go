@@ -242,36 +242,56 @@ func (c *Client) GetSongDetails(songID int) (*SongDetails, error) {
 	return parseDetailPage(string(body), songID), nil
 }
 
-// DownloadCover saves the cover image for a song.
-func (c *Client) DownloadCover(songID int, destDir string) error {
+// FetchCover returns the cover image as a stream plus its Content-Type.
+// The caller MUST Close the returned ReadCloser. Returns os.ErrNotExist
+// when USDB responds 404 (song has no cover); other non-200 statuses
+// surface as a wrapped error.
+func (c *Client) FetchCover(ctx context.Context, songID int) (io.ReadCloser, string, error) {
 	coverURL := fmt.Sprintf("%sdata/cover/%d.jpg", c.baseURL, songID)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, coverURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, coverURL, nil)
 	if err != nil {
-		return fmt.Errorf("creating cover request: %w", err)
+		return nil, "", fmt.Errorf("creating cover request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("cover request: %w", err)
+		return nil, "", fmt.Errorf("cover request: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("cover returned HTTP %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		return nil, "", os.ErrNotExist
 	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, "", fmt.Errorf("cover returned HTTP %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	return resp.Body, contentType, nil
+}
+
+// DownloadCover saves the cover image for a song to <destDir>/cover.jpg.
+func (c *Client) DownloadCover(songID int, destDir string) error {
+	body, _, err := c.FetchCover(context.Background(), songID)
+	if err != nil {
+		return err
+	}
+	defer body.Close()
 
 	destPath := filepath.Join(destDir, "cover.jpg")
-
 	file, err := os.Create(destPath) //nolint:gosec // path constructed from song metadata
 	if err != nil {
 		return fmt.Errorf("creating cover file: %w", err)
 	}
 	defer file.Close()
 
-	if _, err = io.Copy(file, resp.Body); err != nil {
+	if _, err = io.Copy(file, body); err != nil {
 		return fmt.Errorf("writing cover file: %w", err)
 	}
-
 	return nil
 }

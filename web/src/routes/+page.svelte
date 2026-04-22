@@ -38,6 +38,10 @@
   let errorMessage = $state<string | null>(null);
   let downloadingIds = $state<Set<number>>(new Set());
   let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchAbort: AbortController | null = null;
+  const SEARCH_DEBOUNCE_MS = 300;
+  const SEARCH_MIN_CHARS = 2;
 
   function showError(message: string): void {
     errorMessage = message;
@@ -112,25 +116,45 @@
     }
   }
 
-  async function handleSearch(): Promise<void> {
-    const query = searchQuery.trim();
-    if (query === "" || searching) return;
+  async function runSearch(query: string): Promise<void> {
+    // Cancel any in-flight request before starting a new one — keeps stale
+    // results from overwriting fresh ones if the network reorders them.
+    searchAbort?.abort();
+    const controller = new AbortController();
+    searchAbort = controller;
+
     searching = true;
-    searchResults = [];
     try {
-      searchResults = await searchUSDB({ title: query });
-    } catch {
-      searchResults = [];
-      showError("Search failed");
+      const results = await searchUSDB({ title: query }, controller.signal);
+      // Only commit if we're still the latest in-flight call.
+      if (searchAbort === controller) {
+        searchResults = results;
+      }
+    } catch (err) {
+      if ((err as { name?: string }).name === "AbortError") return;
+      if (searchAbort === controller) {
+        searchResults = [];
+        showError("Search failed");
+      }
     } finally {
-      searching = false;
+      if (searchAbort === controller) {
+        searching = false;
+      }
     }
   }
 
-  function handleSearchKeydown(event: KeyboardEvent): void {
-    if (event.key === "Enter") {
-      void handleSearch();
+  function handleSearchInput(): void {
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    const query = searchQuery.trim();
+    if (query.length < SEARCH_MIN_CHARS) {
+      // Clear results when the input gets too short so guests don't see
+      // stale matches from a longer query they just deleted.
+      searchAbort?.abort();
+      searchResults = [];
+      searching = false;
+      return;
     }
+    searchTimer = setTimeout(() => void runSearch(query), SEARCH_DEBOUNCE_MS);
   }
 
   async function handleDownloadAndQueue(result: USDBResult): Promise<void> {
@@ -256,37 +280,24 @@
       <div class="section">
         <div class="search-bar">
           <input
-            type="text"
+            type="search"
             class="search-input"
-            placeholder="Search USDB for songs..."
+            placeholder="Search by title or artist…"
             bind:value={searchQuery}
-            onkeydown={handleSearchKeydown}
+            oninput={handleSearchInput}
           />
-          <Button size="sm" onclick={() => void handleSearch()} disabled={searching}>
-            {searching ? "..." : "Search"}
-          </Button>
+          {#if searching}
+            <span class="search-spinner" aria-label="Searching">…</span>
+          {/if}
         </div>
 
-        {#if searchResults.length > 0}
-          <div class="section-label" style="margin-top: var(--space-md);">USDB RESULTS</div>
-          <div class="list">
-            {#each searchResults as result (result.id)}
-              <SongCard
-                title={result.title}
-                artist={result.artist}
-                onclick={() => void handleDownloadAndQueue(result)}
-              />
-              {#if downloadingIds.has(result.id)}
-                <div class="download-status">Downloading...</div>
-              {/if}
-            {/each}
-          </div>
-        {/if}
-
-        <div class="section-label" style="margin-top: var(--space-md);">
-          {#if loadingSongs}LOADING...{:else}LIBRARY{/if}
+        <div class="section-head" style="margin-top: var(--space-md);">
+          <div class="section-label">In your library</div>
+          <div class="section-sub">Plays instantly</div>
         </div>
-        {#if songs.length > 0}
+        {#if loadingSongs}
+          <div class="empty-prompt"><p>Loading…</p></div>
+        {:else if songs.length > 0}
           <div class="list">
             {#each songs as song (song.id)}
               <SongCard
@@ -294,13 +305,34 @@
                 artist={song.artist}
                 edition={song.edition}
                 year={song.year}
+                coverUrl={"/api/library/" + song.id + "/cover"}
                 onclick={() => void handleQueueSong(song)}
               />
             {/each}
           </div>
-        {:else if !loadingSongs}
+        {:else}
           <div class="empty-prompt">
-            <p>No songs in the library. Search USDB above to download some!</p>
+            <p>Nothing downloaded yet. Search above to grab a song.</p>
+          </div>
+        {/if}
+
+        {#if searchResults.length > 0}
+          <div class="section-head" style="margin-top: var(--space-lg);">
+            <div class="section-label">From the USDB catalog</div>
+            <div class="section-sub">Tap to download (~30s) and queue</div>
+          </div>
+          <div class="list">
+            {#each searchResults as result (result.id)}
+              <SongCard
+                title={result.title}
+                artist={result.artist}
+                coverUrl={"/api/usdb/cover/" + String(result.id)}
+                onclick={() => void handleDownloadAndQueue(result)}
+              />
+              {#if downloadingIds.has(result.id)}
+                <div class="download-status">Downloading…</div>
+              {/if}
+            {/each}
           </div>
         {/if}
       </div>
@@ -313,6 +345,14 @@
     padding: var(--space-md) var(--space-lg);
   }
 
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+  }
+
   .section-label {
     font-size: 0.6875rem;
     font-weight: 600;
@@ -320,6 +360,24 @@
     color: var(--color-pink);
     text-shadow: var(--glow-text-pink);
     margin-bottom: var(--space-sm);
+  }
+
+  .section-head .section-label {
+    margin-bottom: 0;
+  }
+
+  .section-sub {
+    font-size: 0.6875rem;
+    color: var(--color-text-muted);
+    letter-spacing: 0.02em;
+  }
+
+  .search-spinner {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-text-muted);
+    font-size: 1.25rem;
+    padding: 0 var(--space-xs);
   }
 
   .list {

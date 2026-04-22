@@ -98,9 +98,18 @@ describe("API client", () => {
     );
 
     const results = await searchUSDB({ artist: "Queen" });
-    expect(fetch).toHaveBeenCalledWith("/api/usdb/search?artist=Queen");
+    expect(fetch).toHaveBeenCalledWith("/api/usdb/search?artist=Queen", { signal: undefined });
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe("Bohemian Rhapsody");
+  });
+
+  it("searchUSDB forwards an AbortSignal to fetch", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    const controller = new AbortController();
+    await searchUSDB({ title: "test" }, controller.signal);
+    expect(fetch).toHaveBeenCalledWith("/api/usdb/search?title=test", { signal: controller.signal });
   });
 
   it("searchUSDB throws on non-OK response", async () => {

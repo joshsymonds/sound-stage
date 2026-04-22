@@ -3,6 +3,7 @@ package server
 import (
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -14,11 +15,15 @@ type Config struct {
 	// StaticFS holds the SPA assets to serve at /. In production, this is the
 	// embed.FS sub-tree wired in main.go. Tests pass an fstest.MapFS. A nil
 	// StaticFS disables the SPA route entirely (API-only mode).
-	StaticFS   fs.FS
-	Searcher   USDBSearcher
-	Download   *DownloadConfig
-	DeckURL    string // Pascal API base URL (e.g. "http://172.31.0.39:9000")
-	DelyricURL string // Delyric worker base URL (e.g. "http://172.31.0.98:9001")
+	StaticFS fs.FS
+	Searcher USDBSearcher
+	// CoverFetcher exposes USDB's authenticated cover endpoint to the web
+	// client via /api/usdb/cover/{id}. The serve command wires the same
+	// usdb.Client used for Searcher/Download.
+	CoverFetcher CoverFetcher
+	Download     *DownloadConfig
+	DeckURL      string // Pascal API base URL (e.g. "http://172.31.0.39:9000")
+	DelyricURL   string // Delyric worker base URL (e.g. "http://172.31.0.98:9001")
 	// DeckStatus, when set, drives /api/deck-status. The serve command wires
 	// the QueueDriver here so the UI can surface offline state.
 	DeckStatus deckStatusReporter
@@ -39,6 +44,7 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 
 	// API routes.
 	mux.Handle("GET /api/songs", SongsHandler(libCache, cfg.LibraryDir))
+	mux.Handle("GET /api/library/{id}/cover", LibraryCoverHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/queue", QueueListHandler(queue))
 	mux.Handle("POST /api/queue", QueueAddHandler(queue))
 	mux.Handle("DELETE /api/queue/{position}", QueueRemoveHandler(queue))
@@ -47,6 +53,14 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	// USDB search proxy (optional — requires credentials).
 	if cfg.Searcher != nil {
 		mux.Handle("GET /api/usdb/search", USDBSearchHandler(cfg.Searcher))
+	}
+
+	// USDB cover proxy (optional — requires authenticated client). Cache
+	// to disk under <libraryDir>/.usdb-cache so we hit USDB at most once
+	// per cover ID across the lifetime of the deployment.
+	if cfg.CoverFetcher != nil {
+		cacheDir := filepath.Join(cfg.LibraryDir, ".usdb-cache")
+		mux.Handle("GET /api/usdb/cover/{id}", USDBCoverHandler(cfg.CoverFetcher, cacheDir))
 	}
 
 	// Download trigger (optional — requires USDB client + yt-dlp).
