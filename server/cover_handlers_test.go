@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/joshsymonds/sound-stage/server"
 	"github.com/joshsymonds/sound-stage/server/stableid"
@@ -130,6 +131,35 @@ func TestUSDBCoverHandler(t *testing.T) {
 		}
 		if calls := fetcher.calls.Load(); calls != 0 {
 			t.Errorf("fetcher called %d times on cached miss; want 0", calls)
+		}
+	})
+
+	t.Run("expired miss marker triggers a fresh upstream attempt", func(t *testing.T) {
+		t.Parallel()
+		cacheDir := t.TempDir()
+		// Write a miss marker with a backdated mtime well beyond the TTL.
+		missPath := filepath.Join(cacheDir, "77.miss")
+		if err := os.WriteFile(missPath, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-30 * 24 * time.Hour)
+		if err := os.Chtimes(missPath, old, old); err != nil {
+			t.Fatal(err)
+		}
+
+		fetcher := &fakeCoverFetcher{body: "FRESH"}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/usdb/cover/77", nil)
+		usdbCoverMux(fetcher, cacheDir).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 (TTL elapsed → re-fetch), got %d", rec.Code)
+		}
+		if rec.Body.String() != "FRESH" {
+			t.Errorf("body = %q, want FRESH", rec.Body.String())
+		}
+		if calls := fetcher.calls.Load(); calls != 1 {
+			t.Errorf("fetcher called %d times; want 1 (TTL elapsed)", calls)
 		}
 	})
 

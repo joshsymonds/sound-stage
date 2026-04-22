@@ -96,6 +96,10 @@ export async function fetchDeckStatus(): Promise<DeckStatus> {
   try {
     const response = await fetch("/api/deck-status");
     if (!response.ok) {
+      // Distinguish a server error from a network failure for debuggability.
+      // The user still sees "offline," but a partial outage (Caddy up,
+      // sound-stage down) is at least visible in the browser console.
+      console.warn(`/api/deck-status returned ${String(response.status)}`);
       return { online: false, lastSeenSecondsAgo: null };
     }
     return await response.json() as DeckStatus;

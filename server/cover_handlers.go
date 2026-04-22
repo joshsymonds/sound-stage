@@ -30,6 +30,12 @@ const (
 	// this we'd rather fail and let the browser fall back to the placeholder.
 	coverFetchTimeout = 10 * time.Second
 
+	// coverMissTTL bounds the negative-cache lifetime. Without this, a song
+	// that ever 404'd would be marked "no cover" forever — but USDB
+	// occasionally backfills covers for older songs. 7 days is a forgiving
+	// retry window without giving up the rate-limit win.
+	coverMissTTL = 7 * 24 * time.Hour
+
 	// coverCacheDirPerm / coverCacheFilePerm are the perms applied to the
 	// cache dir and the files inside. Sensitive content isn't an issue
 	// (these are just album art) so 0o755 / 0o644 is fine.
@@ -124,12 +130,17 @@ func coverMissPath(cacheDir string, songID int) string {
 }
 
 // serveFromCoverCache returns true if the request was satisfied from disk
-// (either a cached hit or a cached miss). Returns false to let the caller
-// fall through to the upstream fetch.
+// (either a cached hit or a cached miss within TTL). Returns false to let
+// the caller fall through to the upstream fetch.
 func serveFromCoverCache(w http.ResponseWriter, r *http.Request, cacheDir string, songID int) bool {
-	if _, err := os.Stat(coverMissPath(cacheDir, songID)); err == nil {
-		http.NotFound(w, r)
-		return true
+	missPath := coverMissPath(cacheDir, songID)
+	if info, err := os.Stat(missPath); err == nil {
+		if time.Since(info.ModTime()) < coverMissTTL {
+			http.NotFound(w, r)
+			return true
+		}
+		// TTL elapsed — let the caller re-attempt upstream. The next
+		// markCoverMiss (or successful fetch) will replace this file.
 	}
 	hitPath := coverHitPath(cacheDir, songID)
 	if _, err := os.Stat(hitPath); err == nil {

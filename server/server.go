@@ -42,6 +42,11 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	// pipeline when new songs land.
 	libCache := NewLibraryCache()
 
+	// One http.Client shared by all user-facing Deck-bound calls (playback
+	// proxies + notifyDeck). Keeps the pool out of http.DefaultClient so
+	// Deck flakiness can't bleed into unrelated outbound traffic.
+	deckProxy := newDeckProxyClient()
+
 	// API routes.
 	mux.Handle("GET /api/songs", SongsHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/library/{id}/cover", LibraryCoverHandler(libCache, cfg.LibraryDir))
@@ -58,9 +63,14 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 
 	// USDB cover proxy (optional — requires authenticated client). Cache
 	// to disk under <libraryDir>/.usdb-cache so we hit USDB at most once
-	// per cover ID across the lifetime of the deployment.
+	// per cover ID across the lifetime of the deployment. Empty LibraryDir
+	// disables disk caching (avoids writing cache files into the process
+	// CWD); the handler still streams covers, just without persistence.
 	if cfg.CoverFetcher != nil {
-		cacheDir := filepath.Join(cfg.LibraryDir, ".usdb-cache")
+		var cacheDir string
+		if cfg.LibraryDir != "" {
+			cacheDir = filepath.Join(cfg.LibraryDir, ".usdb-cache")
+		}
 		mux.Handle("GET /api/usdb/cover/{id}", USDBCoverHandler(cfg.CoverFetcher, cacheDir))
 	}
 
@@ -69,13 +79,14 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 		dl := *cfg.Download
 		dl.InvalidateLibrary = libCache.Invalidate
 		dl.Queue = queue
+		dl.HTTPClient = deckProxy
 		mux.Handle("POST /api/download", DownloadHandler(dl))
 	}
 
 	// Playback proxy to Steam Deck Pascal API.
-	mux.Handle("GET /api/now-playing", NowPlayingProxyHandler(cfg.DeckURL))
-	mux.Handle("POST /api/playback/pause", PlaybackProxyHandler(cfg.DeckURL, "/pause"))
-	mux.Handle("POST /api/playback/resume", PlaybackProxyHandler(cfg.DeckURL, "/resume"))
+	mux.Handle("GET /api/now-playing", NowPlayingProxyHandler(deckProxy, cfg.DeckURL))
+	mux.Handle("POST /api/playback/pause", PlaybackProxyHandler(deckProxy, cfg.DeckURL, "/pause"))
+	mux.Handle("POST /api/playback/resume", PlaybackProxyHandler(deckProxy, cfg.DeckURL, "/resume"))
 
 	// Delyric worker proxy (optional).
 	if cfg.DelyricURL != "" {

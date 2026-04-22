@@ -43,4 +43,36 @@ describe("AppShell", () => {
     const activeButton = container.querySelector("nav .active");
     expect(activeButton?.textContent).toContain("Party");
   });
+
+  it("active class follows the activeTab prop", () => {
+    // Re-rendering with different activeTab should move .active to the matching
+    // nav button. The prior test only checked the queue case in isolation —
+    // this catches a broken class:active binding that always highlights one tab.
+    const { container: a } = render(AppShell, {
+      props: { children: textSnippet("c"), activeTab: "browse" },
+    });
+    const browseActive = a.querySelector("nav .active");
+    expect(browseActive?.textContent).toContain("Browse");
+    cleanup();
+
+    const { container: b } = render(AppShell, {
+      props: { children: textSnippet("c"), activeTab: "playing" },
+    });
+    const playingActive = b.querySelector("nav .active");
+    expect(playingActive?.textContent).toContain("Now Playing");
+  });
+
+  it("renders the banner snippet when provided", () => {
+    render(AppShell, {
+      props: { children: textSnippet("c"), banner: textSnippet("DECK OFFLINE") },
+    });
+    expect(screen.getByText("DECK OFFLINE")).toBeInTheDocument();
+  });
+
+  it("renders the headerEnd snippet when provided", () => {
+    render(AppShell, {
+      props: { children: textSnippet("c"), headerEnd: textSnippet("Alice · LEAVE") },
+    });
+    expect(screen.getByText("Alice · LEAVE")).toBeInTheDocument();
+  });
 });

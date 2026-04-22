@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -50,8 +52,13 @@ type DownloadConfig struct {
 	// /refresh, the requesting guest's name is added to the queue with a
 	// Song whose ID matches USDX's stableid for the parsed .txt. Optional —
 	// a nil queue disables auto-queue (handler still services downloads).
-	Queue  *Queue
-	Logger *slog.Logger
+	Queue *Queue
+	// HTTPClient is the http.Client used for notifyDeck POSTs. Optional —
+	// nil falls back to http.DefaultClient. server.HandlerWithQueue wires
+	// its shared deck-proxy client here so /refresh shares a pool with the
+	// other Deck-bound handlers.
+	HTTPClient *http.Client
+	Logger     *slog.Logger
 }
 
 type downloadRequest struct {
@@ -69,6 +76,57 @@ type downloadStatus struct {
 
 func newDownloadStatus() *downloadStatus {
 	return &downloadStatus{pending: make(map[int][]string)}
+}
+
+// archiveCache memoises archive.LoadDownloaded so the request handler
+// doesn't read .downloaded.txt from disk on every POST. The map is
+// invalidated after each successful MarkDownloaded call so a song that
+// just finished downloading shows up on the next request.
+type archiveCache struct {
+	mu      sync.RWMutex
+	dir     string
+	loaded  bool
+	entries map[int]struct{}
+	logger  *slog.Logger
+}
+
+func newArchiveCache(dir string, logger *slog.Logger) *archiveCache {
+	return &archiveCache{dir: dir, logger: logger}
+}
+
+func (a *archiveCache) has(songID int) bool {
+	a.mu.RLock()
+	if a.loaded {
+		_, ok := a.entries[songID]
+		a.mu.RUnlock()
+		return ok
+	}
+	a.mu.RUnlock()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.loaded {
+		_, ok := a.entries[songID]
+		return ok
+	}
+	entries, err := archive.LoadDownloaded(a.dir)
+	if err != nil {
+		// Surface the error so a corrupted archive doesn't silently turn
+		// every request into a re-download. Treat as "not in archive" for
+		// this request only — don't memoise the failure.
+		a.logger.Error("loading archive", "dir", a.dir, "error", err)
+		return false
+	}
+	a.entries = entries
+	a.loaded = true
+	_, ok := a.entries[songID]
+	return ok
+}
+
+func (a *archiveCache) invalidate() {
+	a.mu.Lock()
+	a.entries, a.loaded = nil, false
+	a.mu.Unlock()
 }
 
 // start records guest as waiting on this song. Returns true iff this is the
@@ -102,6 +160,16 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	archiveSet := newArchiveCache(dlConfig.OutputDir, logger)
+	// Wrap the existing InvalidateLibrary hook so the archive cache is
+	// dropped alongside the library cache after each successful download.
+	prevInvalidate := dlConfig.InvalidateLibrary
+	dlConfig.InvalidateLibrary = func() {
+		archiveSet.invalidate()
+		if prevInvalidate != nil {
+			prevInvalidate()
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
@@ -121,16 +189,13 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 		}
 
 		// Already on disk: queue inline (no goroutine needed) and return.
-		downloaded, err := archive.LoadDownloaded(dlConfig.OutputDir)
-		if err == nil {
-			if _, ok := downloaded[req.SongID]; ok {
-				queueAlreadyDownloaded(dlConfig, req.SongID, req.Guest, logger)
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode( //nolint:gosec // best-effort
-					map[string]string{"status": "already_downloaded"},
-				)
-				return
-			}
+		if archiveSet.has(req.SongID) {
+			queueAlreadyDownloaded(dlConfig, req.SongID, req.Guest, logger)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode( //nolint:gosec // best-effort
+				map[string]string{"status": "already_downloaded"},
+			)
+			return
 		}
 
 		// Always record the guest as a waiter — the existing goroutine (if
@@ -203,7 +268,15 @@ func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, lo
 
 	if details.HasCover {
 		if coverErr := dlConfig.Client.DownloadCover(songID, songDir); coverErr != nil {
-			logger.Warn("cover download failed", "song_id", songID, "error", coverErr)
+			// Missing covers are normal (USDB serves nocover.png for many
+			// songs, and FetchCover translates HTTP 404 to os.ErrNotExist).
+			// Demote those to Debug so production logs aren't drowned in
+			// false-alarm Warns; reserve Warn for transient failures.
+			if errors.Is(coverErr, os.ErrNotExist) {
+				logger.Debug("no cover available", "song_id", songID)
+			} else {
+				logger.Warn("cover download failed", "song_id", songID, "error", coverErr)
+			}
 		}
 	}
 
@@ -242,7 +315,7 @@ func finalizeDownload(dlConfig DownloadConfig, txtPath string, songID int, logge
 	}
 	// With a configured Deck, /refresh must succeed before queueing — otherwise
 	// USDX doesn't know the song and the queue driver would 404 on stage.
-	if dlConfig.DeckURL != "" && !notifyDeck(dlConfig.DeckURL, txtPath, logger) {
+	if dlConfig.DeckURL != "" && !notifyDeck(dlConfig.HTTPClient, dlConfig.DeckURL, txtPath, logger) {
 		return nil
 	}
 	parsed, parseErr := txtparse.Parse(txtPath)
@@ -324,7 +397,11 @@ func fetchMedia(dl YtDlp, song *usdb.PreparedSong, songDir string, songID int, l
 // notifyDeck POSTs /refresh to the Deck so its in-memory library picks up
 // the newly-downloaded song. Returns true iff the Deck responded HTTP 200.
 // Failures are logged but do not panic — the download itself succeeded.
-func notifyDeck(deckURL, txtPath string, logger *slog.Logger) bool {
+// A nil client falls back to http.DefaultClient (test convenience).
+func notifyDeck(client *http.Client, deckURL, txtPath string, logger *slog.Logger) bool {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	body, err := json.Marshal(map[string]string{"path": txtPath})
 	if err != nil {
 		logger.Warn("marshal /refresh payload", "error", err)
@@ -341,7 +418,7 @@ func notifyDeck(deckURL, txtPath string, logger *slog.Logger) bool {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		logger.Warn("deck unreachable for /refresh", "error", err)
 		return false

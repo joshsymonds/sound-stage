@@ -11,8 +11,26 @@ import (
 const proxyTimeout = 5 * time.Second
 const maxProxyResponse = 10 << 20 // 10 MB
 
-// PlaybackProxyHandler creates a handler that proxies POST requests to the Deck's Pascal API.
-func PlaybackProxyHandler(deckURL, endpoint string) http.Handler {
+// newDeckProxyClient builds an http.Client tuned for user-facing Deck-bound
+// requests (pause/resume/now-playing proxies + notifyDeck). One per
+// Handler instance — shares a connection pool across the three call sites
+// without polluting http.DefaultClient if the Deck misbehaves. Distinct
+// from QueueDriver's tighter probe timeout (1.5s).
+func newDeckProxyClient() *http.Client {
+	return &http.Client{
+		Timeout: proxyTimeout + time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        deckMaxIdleConns,
+			MaxIdleConnsPerHost: deckMaxIdleConnsPerHost,
+			IdleConnTimeout:     deckIdleConnTimeout,
+		},
+	}
+}
+
+// PlaybackProxyHandler creates a handler that proxies POST requests to the
+// Deck's Pascal API. The caller-provided client is reused for the proxy +
+// notifyDeck pool sharing.
+func PlaybackProxyHandler(client *http.Client, deckURL, endpoint string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if deckURL == "" {
 			http.Error(w, "deck not configured", http.StatusServiceUnavailable)
@@ -29,7 +47,7 @@ func PlaybackProxyHandler(deckURL, endpoint string) http.Handler {
 			return
 		}
 
-		resp, err := http.DefaultClient.Do(proxyReq)
+		resp, err := client.Do(proxyReq)
 		if err != nil {
 			http.Error(w, "deck unreachable", http.StatusServiceUnavailable)
 			return
@@ -43,7 +61,7 @@ func PlaybackProxyHandler(deckURL, endpoint string) http.Handler {
 }
 
 // NowPlayingProxyHandler proxies GET /now-playing from the Deck.
-func NowPlayingProxyHandler(deckURL string) http.Handler {
+func NowPlayingProxyHandler(client *http.Client, deckURL string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if deckURL == "" {
 			w.Header().Set("Content-Type", "application/json")
@@ -62,7 +80,7 @@ func NowPlayingProxyHandler(deckURL string) http.Handler {
 			return
 		}
 
-		resp, err := http.DefaultClient.Do(proxyReq)
+		resp, err := client.Do(proxyReq)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, "null")

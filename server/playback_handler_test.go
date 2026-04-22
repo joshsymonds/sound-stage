@@ -25,7 +25,7 @@ func TestPlaybackProxyHandler(t *testing.T) {
 		deck := httptest.NewServer(fake)
 		defer deck.Close()
 
-		handler := server.PlaybackProxyHandler(deck.URL, "/pause")
+		handler := server.PlaybackProxyHandler(http.DefaultClient, deck.URL, "/pause")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/playback/pause", nil))
 
@@ -47,7 +47,7 @@ func TestPlaybackProxyHandler(t *testing.T) {
 		deck := httptest.NewServer(fake)
 		defer deck.Close()
 
-		handler := server.PlaybackProxyHandler(deck.URL, "/pause")
+		handler := server.PlaybackProxyHandler(http.DefaultClient, deck.URL, "/pause")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/playback/pause", nil))
 
@@ -58,7 +58,7 @@ func TestPlaybackProxyHandler(t *testing.T) {
 
 	t.Run("returns 503 when deck is unreachable", func(t *testing.T) {
 		t.Parallel()
-		handler := server.PlaybackProxyHandler("http://127.0.0.1:1", "/pause")
+		handler := server.PlaybackProxyHandler(http.DefaultClient, "http://127.0.0.1:1", "/pause")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/playback/pause", nil))
 
@@ -69,7 +69,7 @@ func TestPlaybackProxyHandler(t *testing.T) {
 
 	t.Run("returns 503 when deck not configured", func(t *testing.T) {
 		t.Parallel()
-		handler := server.PlaybackProxyHandler("", "/pause")
+		handler := server.PlaybackProxyHandler(http.DefaultClient, "", "/pause")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/playback/pause", nil))
 
@@ -93,7 +93,7 @@ func TestNowPlayingProxyHandler(t *testing.T) {
 		deck := httptest.NewServer(fake)
 		defer deck.Close()
 
-		handler := server.NowPlayingProxyHandler(deck.URL)
+		handler := server.NowPlayingProxyHandler(http.DefaultClient, deck.URL)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/now-playing", nil))
 
@@ -125,7 +125,7 @@ func TestNowPlayingProxyHandler(t *testing.T) {
 		deck := httptest.NewServer(fake)
 		defer deck.Close()
 
-		handler := server.NowPlayingProxyHandler(deck.URL)
+		handler := server.NowPlayingProxyHandler(http.DefaultClient, deck.URL)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/now-playing", nil))
 
@@ -139,7 +139,7 @@ func TestNowPlayingProxyHandler(t *testing.T) {
 
 	t.Run("returns null when deck offline", func(t *testing.T) {
 		t.Parallel()
-		handler := server.NowPlayingProxyHandler("http://127.0.0.1:1")
+		handler := server.NowPlayingProxyHandler(http.DefaultClient, "http://127.0.0.1:1")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/now-playing", nil))
 
@@ -153,7 +153,7 @@ func TestNowPlayingProxyHandler(t *testing.T) {
 
 	t.Run("returns null when deck not configured", func(t *testing.T) {
 		t.Parallel()
-		handler := server.NowPlayingProxyHandler("")
+		handler := server.NowPlayingProxyHandler(http.DefaultClient, "")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/now-playing", nil))
 

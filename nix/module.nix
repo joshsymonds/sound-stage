@@ -119,21 +119,32 @@ in {
 
         EnvironmentFile = mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
-        # Hardening
+        # Hardening (see systemd.exec(5)).
         NoNewPrivileges = true;
         PrivateTmp = true;
         PrivateDevices = true;
-        ProtectSystem = "full";
+        ProtectSystem = "strict";
         ProtectHome = true;
+        ProtectHostname = true;
+        ProtectClock = true;
         ProtectKernelTunables = true;
         ProtectKernelModules = true;
+        ProtectKernelLogs = true;
         ProtectControlGroups = true;
+        ProtectProc = "invisible";
+        ProcSubset = "pid";
         ReadWritePaths = [cfg.libraryDir];
         RestrictAddressFamilies = ["AF_UNIX" "AF_INET" "AF_INET6"];
         RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
         SystemCallArchitectures = "native";
+        SystemCallFilter = ["@system-service" "~@privileged" "~@resources"];
+        CapabilityBoundingSet = [""];
+        AmbientCapabilities = [""];
+        UMask = "0077";
       };
     };
   };

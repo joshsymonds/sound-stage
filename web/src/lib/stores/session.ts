@@ -13,13 +13,20 @@ export function getGuestName(): string | null {
   return value || null;
 }
 
+// Append the Secure attribute only when the page itself is served over
+// HTTPS — dev (`vite dev` over http://localhost) needs the cookie to be
+// readable, and Secure cookies on a non-HTTPS page are silently dropped.
+function secureFlag(): string {
+  return typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+}
+
 export function setGuestName(name: string): void {
   const trimmed = name.trim();
-  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(trimmed)}; path=/; max-age=${String(MAX_AGE)}; SameSite=Lax`;
+  document.cookie = `${COOKIE_NAME}=${encodeURIComponent(trimmed)}; path=/; max-age=${String(MAX_AGE)}; SameSite=Lax${secureFlag()}`;
 }
 
 export function clearGuestName(): void {
-  // max-age=0 expires the cookie immediately. SameSite must match the
-  // original write or some browsers won't accept the deletion.
-  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+  // max-age=0 expires the cookie immediately. SameSite + Secure must match
+  // the original write or some browsers won't accept the deletion.
+  document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax${secureFlag()}`;
 }
