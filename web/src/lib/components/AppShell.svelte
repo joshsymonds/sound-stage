@@ -15,7 +15,7 @@
 
   const tabs = [
     { id: "playing", label: "Now Playing" },
-    { id: "queue", label: "Queue" },
+    { id: "queue", label: "Party" },
     { id: "browse", label: "Browse" },
   ] as const;
 </script>

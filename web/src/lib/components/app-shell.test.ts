@@ -16,7 +16,7 @@ describe("AppShell", () => {
   it("renders navigation items", () => {
     render(AppShell, { props: { children: textSnippet("content") } });
     expect(screen.getByRole("button", { name: /now playing/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /queue/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /party/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
   });
 
@@ -32,7 +32,7 @@ describe("AppShell", () => {
       props: { children: textSnippet("content"), onnavigate: handleNav },
     });
 
-    await user.click(screen.getByRole("button", { name: /queue/i }));
+    await user.click(screen.getByRole("button", { name: /party/i }));
     expect(handleNav).toHaveBeenCalledWith("queue");
   });
 
@@ -41,6 +41,6 @@ describe("AppShell", () => {
       props: { children: textSnippet("content"), activeTab: "queue" },
     });
     const activeButton = container.querySelector("nav .active");
-    expect(activeButton?.textContent).toContain("Queue");
+    expect(activeButton?.textContent).toContain("Party");
   });
 });

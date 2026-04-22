@@ -115,3 +115,12 @@ export async function removeFromQueue(position: number, guest: string): Promise<
   }
 }
 
+export async function removeAllByGuest(guest: string): Promise<void> {
+  const response = await fetch(`/api/queue?guest=${encodeURIComponent(guest)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to remove guest from queue: ${String(response.status)}`);
+  }
+}
+

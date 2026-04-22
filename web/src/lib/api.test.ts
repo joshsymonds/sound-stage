@@ -5,6 +5,7 @@ import {
   fetchDeckStatus,
   fetchQueue,
   fetchSongs,
+  removeAllByGuest,
   removeFromQueue,
   searchUSDB,
   triggerDownload,
@@ -174,6 +175,23 @@ describe("API client", () => {
     vi.mocked(fetch).mockRejectedValueOnce(new TypeError("network"));
     const status = await fetchDeckStatus();
     expect(status).toEqual({ online: false, lastSeenSecondsAgo: null });
+  });
+
+  it("removeAllByGuest calls DELETE /api/queue?guest=NAME", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await removeAllByGuest("Alice");
+    expect(fetch).toHaveBeenCalledWith("/api/queue?guest=Alice", { method: "DELETE" });
+  });
+
+  it("removeAllByGuest url-encodes the guest name", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await removeAllByGuest("Alice & Bob");
+    expect(fetch).toHaveBeenCalledWith("/api/queue?guest=Alice%20%26%20Bob", { method: "DELETE" });
+  });
+
+  it("removeAllByGuest throws on non-OK response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("err", { status: 500 }));
+    await expect(removeAllByGuest("Alice")).rejects.toThrow("remove guest");
   });
 
   it("removeFromQueue throws on non-OK response", async () => {

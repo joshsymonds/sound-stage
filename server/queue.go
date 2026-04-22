@@ -139,6 +139,22 @@ func (q *Queue) Next() *QueueEntry {
 	return &first
 }
 
+// RemoveByGuest drops all entries belonging to the named guest. Returns the
+// number removed. Leaves guestOrder intact so a re-queue preserves the
+// guest's original turn position — matches Next's semantics. Idempotent:
+// calling on a guest with no entries returns 0 and is a no-op.
+func (q *Queue) RemoveByGuest(guest string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	songs, ok := q.guestSongs[guest]
+	if !ok {
+		return 0
+	}
+	delete(q.guestSongs, guest)
+	return len(songs)
+}
+
 // Remove removes the entry at the given 1-indexed position. Returns true if removed.
 func (q *Queue) Remove(position int) bool {
 	q.mu.Lock()

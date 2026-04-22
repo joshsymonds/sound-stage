@@ -65,6 +65,22 @@ func QueueAddHandler(queue *Queue) http.Handler {
 	})
 }
 
+// QueueRemoveByGuestHandler drops every queued entry belonging to the named
+// guest. Wi-Fi-gated trust model: anyone can boot anyone (the user's stated
+// "no admin, we're all friends" intent). Always 204 on a valid request,
+// even when the guest had zero entries — idempotent from the caller's view.
+func QueueRemoveByGuestHandler(queue *Queue) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guest := r.URL.Query().Get("guest")
+		if guest == "" {
+			http.Error(w, "guest is required", http.StatusBadRequest)
+			return
+		}
+		queue.RemoveByGuest(guest)
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
 // QueueRemoveHandler removes the entry at the given 1-indexed position when
 // the requesting guest matches the entry's owner.
 //

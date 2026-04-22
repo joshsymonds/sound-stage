@@ -92,6 +92,62 @@ func newRemoveMux(q *server.Queue) http.Handler {
 	return mux
 }
 
+func TestQueueRemoveByGuestHandler(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removes all entries for the named guest", func(t *testing.T) {
+		t.Parallel()
+		q := server.NewQueue()
+		q.Add(server.Song{ID: "a1", Title: "First", Artist: "A"}, "Alice")
+		q.Add(server.Song{ID: "a2", Title: "Second", Artist: "A"}, "Alice")
+		q.Add(server.Song{ID: "b1", Title: "Third", Artist: "B"}, "Bob")
+
+		handler := server.QueueRemoveByGuestHandler(q)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/queue?guest=Alice", nil))
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+		}
+		entries := q.List()
+		if len(entries) != 1 {
+			t.Fatalf("queue length = %d, want 1 (Bob's song)", len(entries))
+		}
+		if entries[0].Guest != "Bob" {
+			t.Errorf("remaining guest = %q, want Bob", entries[0].Guest)
+		}
+	})
+
+	t.Run("idempotent on guest with no entries", func(t *testing.T) {
+		t.Parallel()
+		q := server.NewQueue()
+		q.Add(server.Song{ID: "a1", Title: "First", Artist: "A"}, "Alice")
+
+		handler := server.QueueRemoveByGuestHandler(q)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/queue?guest=Charlie", nil))
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected 204, got %d", rec.Code)
+		}
+		if got := len(q.List()); got != 1 {
+			t.Errorf("queue length = %d, want 1 (unchanged)", got)
+		}
+	})
+
+	t.Run("400 when guest query is missing", func(t *testing.T) {
+		t.Parallel()
+		q := server.NewQueue()
+		handler := server.QueueRemoveByGuestHandler(q)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/queue", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+	})
+}
+
 func TestQueueRemoveHandler(t *testing.T) {
 	t.Parallel()
 

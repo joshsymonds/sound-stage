@@ -47,6 +47,7 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	mux.Handle("GET /api/library/{id}/cover", LibraryCoverHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/queue", QueueListHandler(queue))
 	mux.Handle("POST /api/queue", QueueAddHandler(queue))
+	mux.Handle("DELETE /api/queue", QueueRemoveByGuestHandler(queue))
 	mux.Handle("DELETE /api/queue/{position}", QueueRemoveHandler(queue))
 	mux.Handle("GET /api/deck-status", DeckStatusHandler(cfg.DeckStatus))
 
