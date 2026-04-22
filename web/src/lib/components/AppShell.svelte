@@ -4,10 +4,12 @@
   let {
     activeTab = "playing",
     onnavigate,
+    banner,
     children,
   }: {
     activeTab?: "playing" | "queue" | "browse";
     onnavigate?: (tab: string) => void;
+    banner?: Snippet;
     children: Snippet;
   } = $props();
 
@@ -19,6 +21,10 @@
 </script>
 
 <div class="app-shell">
+  {#if banner}
+    {@render banner()}
+  {/if}
+
   <header class="header">
     <span class="logo">SoundStage</span>
   </header>

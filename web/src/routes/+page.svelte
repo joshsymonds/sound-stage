@@ -216,16 +216,18 @@
   <div class="toast">{errorMessage}</div>
 {/if}
 
-{#if deckStatus !== null && !deckStatus.online}
-  <div class="deck-offline" role="status" aria-live="polite">
-    Deck is offline — songs you queue won't play until it's back.
-  </div>
-{/if}
+{#snippet deckOfflineBanner()}
+  {#if deckStatus !== null && !deckStatus.online}
+    <div class="deck-offline" role="status" aria-live="polite">
+      Deck is offline — songs you queue won't play until it's back.
+    </div>
+  {/if}
+{/snippet}
 
 {#if guestName === null}
   <NameEntry onsubmit={handleJoin} />
 {:else}
-  <AppShell {activeTab} onnavigate={handleNavigate}>
+  <AppShell {activeTab} onnavigate={handleNavigate} banner={deckOfflineBanner}>
     {#if activeTab === "playing"}
       <NowPlaying
         title={nowPlaying?.title}
@@ -472,17 +474,13 @@
   }
 
   .deck-offline {
-    position: sticky;
-    top: 0;
-    z-index: 90;
-    padding: var(--space-sm) var(--space-md);
+    flex-shrink: 0;
+    padding: var(--space-xs) var(--space-md);
     background: rgba(255, 70, 70, 0.18);
     border-bottom: 1px solid var(--color-red);
     color: var(--color-text);
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     font-weight: 500;
     text-align: center;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
   }
 </style>
