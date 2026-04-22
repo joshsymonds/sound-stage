@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     addToQueue,
+    fetchDeckStatus,
     fetchNowPlaying,
     fetchQueue,
     fetchSongs,
@@ -10,7 +11,7 @@
     searchUSDB,
     triggerDownload,
   } from "$lib/api";
-  import type { USDBResult } from "$lib/api";
+  import type { DeckStatus, USDBResult } from "$lib/api";
   import AppShell from "$lib/components/AppShell.svelte";
   import Button from "$lib/components/Button.svelte";
   import NameEntry from "$lib/components/NameEntry.svelte";
@@ -28,6 +29,7 @@
   let songs = $state<Song[]>([]);
   let queue = $state<QueueEntry[]>([]);
   let nowPlaying = $state<NowPlayingState | null>(null);
+  let deckStatus = $state<DeckStatus | null>(null);
   let searchResults = $state<USDBResult[]>([]);
   let searchQuery = $state("");
   let loadingSongs = $state(false);
@@ -68,12 +70,14 @@
 
   async function poll(): Promise<void> {
     try {
-      const [queueData, nowPlayingData] = await Promise.all([
+      const [queueData, nowPlayingData, deckStatusData] = await Promise.all([
         fetchQueue(),
         fetchNowPlaying(),
+        fetchDeckStatus(),
       ]);
       queue = queueData;
       nowPlaying = nowPlayingData;
+      deckStatus = deckStatusData;
     } catch {
       // Polling failures are non-critical.
     }
@@ -175,6 +179,12 @@
 
 {#if errorMessage}
   <div class="toast">{errorMessage}</div>
+{/if}
+
+{#if deckStatus !== null && !deckStatus.online}
+  <div class="deck-offline" role="status" aria-live="polite">
+    Deck is offline — songs you queue won't play until it's back.
+  </div>
 {/if}
 
 {#if guestName === null}
@@ -380,5 +390,20 @@
     font-weight: 500;
     z-index: 100;
     animation: fade-slide-up 200ms ease;
+  }
+
+  .deck-offline {
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    padding: var(--space-sm) var(--space-md);
+    background: rgba(255, 70, 70, 0.18);
+    border-bottom: 1px solid var(--color-red);
+    color: var(--color-text);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    text-align: center;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
   }
 </style>

@@ -316,3 +316,46 @@ func TestNewQueueDriver_EmptyDeckURLReturnsNil(t *testing.T) {
 		t.Errorf("NewQueueDriver(\"\", ...) = %v, want nil", driver)
 	}
 }
+
+func TestQueueDriver_StatusBeforeStart(t *testing.T) {
+	t.Parallel()
+	driver := server.NewQueueDriver("http://127.0.0.1:1", server.NewQueue(), tickInterval)
+	ok, age := driver.Status()
+	if ok {
+		t.Errorf("ok = true before any probe; want false")
+	}
+	if age != 0 {
+		t.Errorf("age = %v before any probe; want 0", age)
+	}
+}
+
+func TestQueueDriver_StatusReflectsSuccessfulProbe(t *testing.T) {
+	t.Parallel()
+	_, _, driver := setupDriver(t)
+	driver.Start()
+
+	if !waitFor(500*time.Millisecond, func() bool {
+		ok, age := driver.Status()
+		return ok && age > 0
+	}) {
+		ok, age := driver.Status()
+		t.Fatalf("Status never reported ok=true; got ok=%v age=%v", ok, age)
+	}
+}
+
+func TestQueueDriver_StatusReflectsFailedProbe(t *testing.T) {
+	t.Parallel()
+	// Point at an unreachable port so every probe errors. Driver records
+	// the failure on each tick.
+	driver := server.NewQueueDriver("http://127.0.0.1:1", server.NewQueue(), tickInterval)
+	t.Cleanup(driver.Stop)
+	driver.Start()
+
+	if !waitFor(500*time.Millisecond, func() bool {
+		ok, age := driver.Status()
+		return !ok && age > 0
+	}) {
+		ok, age := driver.Status()
+		t.Fatalf("Status never reported a failed probe; got ok=%v age=%v", ok, age)
+	}
+}

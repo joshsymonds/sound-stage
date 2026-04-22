@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { addToQueue, fetchQueue, fetchSongs, removeFromQueue, searchUSDB, triggerDownload } from "./api";
+import {
+  addToQueue,
+  fetchDeckStatus,
+  fetchQueue,
+  fetchSongs,
+  removeFromQueue,
+  searchUSDB,
+  triggerDownload,
+} from "./api";
 import type { QueueEntry, Song } from "./types";
 
 const mockSongs: Song[] = [
@@ -141,6 +149,22 @@ describe("API client", () => {
 
     await removeFromQueue(1, "Alice & Bob");
     expect(fetch).toHaveBeenCalledWith("/api/queue/1?guest=Alice%20%26%20Bob", { method: "DELETE" });
+  });
+
+  it("fetchDeckStatus calls GET /api/deck-status and returns the body", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ online: true, lastSeenSecondsAgo: 1.2 }), { status: 200 }),
+    );
+
+    const status = await fetchDeckStatus();
+    expect(fetch).toHaveBeenCalledWith("/api/deck-status");
+    expect(status).toEqual({ online: true, lastSeenSecondsAgo: 1.2 });
+  });
+
+  it("fetchDeckStatus returns offline on network error", async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError("network"));
+    const status = await fetchDeckStatus();
+    expect(status).toEqual({ online: false, lastSeenSecondsAgo: null });
   });
 
   it("removeFromQueue throws on non-OK response", async () => {

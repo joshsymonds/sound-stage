@@ -19,6 +19,9 @@ type Config struct {
 	Download   *DownloadConfig
 	DeckURL    string // Pascal API base URL (e.g. "http://172.31.0.39:9000")
 	DelyricURL string // Delyric worker base URL (e.g. "http://172.31.0.98:9001")
+	// DeckStatus, when set, drives /api/deck-status. The serve command wires
+	// the QueueDriver here so the UI can surface offline state.
+	DeckStatus deckStatusReporter
 }
 
 // Handler creates the HTTP handler with all routes configured.
@@ -39,6 +42,7 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	mux.Handle("GET /api/queue", QueueListHandler(queue))
 	mux.Handle("POST /api/queue", QueueAddHandler(queue))
 	mux.Handle("DELETE /api/queue/{position}", QueueRemoveHandler(queue))
+	mux.Handle("GET /api/deck-status", DeckStatusHandler(cfg.DeckStatus))
 
 	// USDB search proxy (optional — requires credentials).
 	if cfg.Searcher != nil {

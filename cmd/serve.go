@@ -81,13 +81,17 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 
 	queue := server.NewQueue()
-	srv := server.NewWithQueue(cfg, queue)
 
 	driver := server.NewQueueDriver(cfg.DeckURL, queue, queueDriverInterval)
 	if driver != nil {
+		// Wire the driver as the deck-status reporter BEFORE building the
+		// server, so /api/deck-status reflects probe state.
+		cfg.DeckStatus = driver
 		fmt.Fprintf(os.Stderr, "Deck queue driver: %s (tick %s)\n", cfg.DeckURL, queueDriverInterval)
 		driver.Start()
 	}
+
+	srv := server.NewWithQueue(cfg, queue)
 
 	if cfg.DelyricURL != "" {
 		fmt.Fprintf(os.Stderr, "Delyric worker: %s\n", cfg.DelyricURL)

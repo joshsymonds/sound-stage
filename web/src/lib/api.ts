@@ -7,6 +7,11 @@ export interface USDBResult {
   language: string;
 }
 
+export interface DeckStatus {
+  online: boolean;
+  lastSeenSecondsAgo: number | null;
+}
+
 export async function fetchSongs(): Promise<Song[]> {
   const response = await fetch("/api/songs");
   if (!response.ok) {
@@ -82,6 +87,20 @@ export async function pausePlayback(): Promise<void> {
 
 export async function resumePlayback(): Promise<void> {
   await fetch("/api/playback/resume", { method: "POST" });
+}
+
+export async function fetchDeckStatus(): Promise<DeckStatus> {
+  try {
+    const response = await fetch("/api/deck-status");
+    if (!response.ok) {
+      return { online: false, lastSeenSecondsAgo: null };
+    }
+    return await response.json() as DeckStatus;
+  } catch {
+    // Network error reaching our own server → assume offline rather than
+    // crashing the poll loop.
+    return { online: false, lastSeenSecondsAgo: null };
+  }
 }
 
 export async function removeFromQueue(position: number, guest: string): Promise<void> {

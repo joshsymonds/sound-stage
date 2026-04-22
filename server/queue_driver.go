@@ -34,6 +34,11 @@ type QueueDriver struct {
 	// tickWG tracks spawned tick goroutines so Stop can wait for them before
 	// returning.
 	tickWG sync.WaitGroup
+	// statusMu guards lastProbeOK/lastProbeAt — written by every isDeckBusy
+	// call (driver tick goroutine), read by Status() from /api/deck-status.
+	statusMu    sync.RWMutex
+	lastProbeOK bool
+	lastProbeAt time.Time
 }
 
 // NewQueueDriver returns a driver configured to talk to deckURL, or nil if
@@ -202,29 +207,62 @@ func (d *QueueDriver) slotEmpty() bool {
 // actively playing a song. A JSON `null` body means idle. Any network or
 // parse error is treated as "busy" so the driver backs off rather than
 // staging into a possibly-broken Deck.
+//
+// Side effect: updates the reachability status (lastProbeOK/lastProbeAt)
+// every call, so Status() can surface Deck connectivity to the UI.
 func (d *QueueDriver) isDeckBusy() bool {
+	busy, ok := d.probeDeck()
+	d.recordProbe(ok)
+	return busy
+}
+
+// probeDeck does the actual HTTP probe. Returns (busy, reachable).
+// "busy" is true when the Deck is mid-song or unreachable (the driver
+// backs off either way). "reachable" is true only when the request
+// completed at the HTTP layer with a parseable body.
+func (d *QueueDriver) probeDeck() (busy, reachable bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), driverRequestTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.deckURL+"/now-playing", nil)
 	if err != nil {
-		return true
+		return true, false
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return true
+		return true, false
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxProxyResponse))
 	if err != nil {
-		return true
+		return true, false
 	}
 	var parsed any
 	if jsonErr := json.Unmarshal(body, &parsed); jsonErr != nil {
-		return true
+		return true, false
 	}
-	return parsed != nil
+	return parsed != nil, true
+}
+
+func (d *QueueDriver) recordProbe(ok bool) {
+	d.statusMu.Lock()
+	defer d.statusMu.Unlock()
+	d.lastProbeOK = ok
+	d.lastProbeAt = time.Now()
+}
+
+// Status returns the most recent Deck reachability result and how long ago
+// it was probed. Before any probe has run (or after Stop), age is the zero
+// duration and ok is false — equivalent to "Deck unreachable" from the UI's
+// perspective.
+func (d *QueueDriver) Status() (ok bool, age time.Duration) {
+	d.statusMu.RLock()
+	defer d.statusMu.RUnlock()
+	if d.lastProbeAt.IsZero() {
+		return false, 0
+	}
+	return d.lastProbeOK, time.Since(d.lastProbeAt)
 }
 
 type queueStagePayload struct {
