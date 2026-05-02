@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,7 +215,62 @@ func TestUSDBCoverHandler(t *testing.T) {
 			t.Errorf("upstream FetchCover should not be called for a cached hit, got %d calls", calls)
 		}
 	})
+
+	t.Run("concurrent uncached requests coalesce to one upstream call", func(t *testing.T) {
+		t.Parallel()
+		// Hold the upstream fetcher in flight while a second request races
+		// in. Without coalescing we'd see 2 FetchCover calls; the
+		// singleflight collapses them to 1.
+		release := make(chan struct{})
+		fetcher := &gatedCoverFetcher{
+			body:    "BYTES",
+			release: release,
+		}
+		cacheDir := t.TempDir()
+		handler := usdbCoverMux(fetcher, cacheDir)
+
+		var wg sync.WaitGroup
+		const concurrency = 4
+		wg.Add(concurrency)
+		for range concurrency {
+			go func() {
+				defer wg.Done()
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/api/usdb/cover/123", nil)
+				handler.ServeHTTP(rec, req)
+			}()
+		}
+		// Give the goroutines time to enter inflight.Do before the leader
+		// completes — otherwise singleflight has nothing to coalesce.
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+		wg.Wait()
+
+		if got := fetcher.calls.Load(); got != 1 {
+			t.Errorf("expected 1 upstream FetchCover call (singleflight), got %d", got)
+		}
+	})
 }
+
+// gatedCoverFetcher blocks the leader's fetch on a channel so a test can
+// hold the singleflight slot open while followers attempt to enter.
+type gatedCoverFetcher struct {
+	body    string
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (g *gatedCoverFetcher) FetchCover(ctx context.Context, _ int) (io.ReadCloser, string, error) {
+	g.calls.Add(1)
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	}
+	return io.NopCloser(strings.NewReader(g.body)), "image/jpeg", nil
+}
+
+func (g *gatedCoverFetcher) Ready() bool { return true }
 
 // libraryCoverMux mounts the library cover handler so r.PathValue resolves.
 func libraryCoverMux(cache *server.LibraryCache, libraryDir string) http.Handler {

@@ -54,7 +54,7 @@ func runSearch(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("login failed: %w", err)
 	}
 
-	results, err := client.Search(usdb.SearchParams{
+	results, err := client.Search(cmd.Context(), usdb.SearchParams{
 		Artist:  searchArtist,
 		Title:   searchTitle,
 		Edition: searchEdition,

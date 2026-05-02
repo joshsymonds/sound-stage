@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -10,9 +11,11 @@ import (
 // USDBSearcher abstracts the USDB search capability for testing. Ready
 // reports whether the underlying client has logged in; while false the
 // handler short-circuits with HTTP 503 so the client knows to retry.
+// Search takes the request context so an abandoned search releases the
+// upstream goroutine instead of running to USDB's 30s httpTimeout.
 type USDBSearcher interface {
 	Ready() bool
-	Search(params usdb.SearchParams) ([]usdb.Song, error)
+	Search(ctx context.Context, params usdb.SearchParams) ([]usdb.Song, error)
 }
 
 // usdbNotReadyRetryAfter is the Retry-After value sent on 503 responses
@@ -44,7 +47,7 @@ func USDBSearchHandler(searcher USDBSearcher) http.Handler {
 			return
 		}
 
-		results, err := searcher.Search(usdb.SearchParams{
+		results, err := searcher.Search(r.Context(), usdb.SearchParams{
 			Artist:  artist,
 			Title:   title,
 			Edition: edition,

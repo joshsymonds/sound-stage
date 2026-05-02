@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,7 +19,7 @@ type mockSearcher struct {
 	notReady bool // default false (= ready) so existing tests don't need updates
 }
 
-func (m *mockSearcher) Search(_ usdb.SearchParams) ([]usdb.Song, error) {
+func (m *mockSearcher) Search(_ context.Context, _ usdb.SearchParams) ([]usdb.Song, error) {
 	return m.results, m.err
 }
 

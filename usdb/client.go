@@ -187,8 +187,11 @@ func (c *Client) loginAsync(ctx context.Context, backoff []time.Duration) error 
 	}
 }
 
-// Search queries USDB for songs matching the given params.
-func (c *Client) Search(params SearchParams) ([]Song, error) {
+// Search queries USDB for songs matching the given params. The context
+// scopes the upstream HTTP call — handlers should pass r.Context() so an
+// abandoned search releases the goroutine instead of running to the 30s
+// httpTimeout.
+func (c *Client) Search(ctx context.Context, params SearchParams) ([]Song, error) {
 	limit := params.Limit
 	if limit <= 0 {
 		limit = 25
@@ -211,7 +214,7 @@ func (c *Client) Search(params SearchParams) ([]Song, error) {
 	}
 
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		c.baseURL+"?link=list",
 		strings.NewReader(data.Encode()),
@@ -241,21 +244,21 @@ const maxTxtRetries = 5
 
 // GetSongTxt downloads the raw UltraStar txt for a song.
 // If USDB returns a rate-limit page, it waits and retries automatically.
-func (c *Client) GetSongTxt(songID int) (string, error) {
-	return c.getSongTxt(songID, func(d time.Duration) {
+func (c *Client) GetSongTxt(ctx context.Context, songID int) (string, error) {
+	return c.getSongTxt(ctx, songID, func(d time.Duration) {
 		timer := time.NewTimer(d)
 		<-timer.C
 	})
 }
 
 // getSongTxt is the internal implementation that accepts a sleep function for testing.
-func (c *Client) getSongTxt(songID int, sleepFn func(time.Duration)) (string, error) {
+func (c *Client) getSongTxt(ctx context.Context, songID int, sleepFn func(time.Duration)) (string, error) {
 	txtURL := fmt.Sprintf("%s?link=gettxt&id=%d", c.baseURL, songID)
 
 	for attempt := range maxTxtRetries {
 		data := url.Values{"wd": {"1"}}
 		req, err := http.NewRequestWithContext(
-			context.Background(),
+			ctx,
 			http.MethodPost,
 			txtURL,
 			strings.NewReader(data.Encode()),
@@ -302,9 +305,9 @@ func (c *Client) getSongTxt(songID int, sleepFn func(time.Duration)) (string, er
 }
 
 // GetSongDetails fetches the detail page and extracts metadata + YouTube IDs from comments.
-func (c *Client) GetSongDetails(songID int) (*SongDetails, error) {
+func (c *Client) GetSongDetails(ctx context.Context, songID int) (*SongDetails, error) {
 	req, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodGet,
 		fmt.Sprintf("%s?link=detail&id=%d", c.baseURL, songID),
 		nil,

@@ -56,8 +56,12 @@ async function rasterize(browser, sizes) {
   await context.close();
 }
 
+// Prefer the standard Playwright env var so non-NixOS contributors can
+// regenerate icons without editing this file; fall back to the system
+// chromium path that ships in the dev shell.
 const browser = await chromium.launch({
-  executablePath: "/run/current-system/sw/bin/chromium",
+  executablePath:
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? "/run/current-system/sw/bin/chromium",
 });
 try {
   await rasterize(browser, [

@@ -168,6 +168,23 @@ func TestParseDetailPage_NoComments(t *testing.T) {
 	}
 }
 
+// TestParseDetailPage_DecodesHTMLEntities locks in the html.UnescapeString
+// call on the detail-page artist/title; without it the download pipeline
+// would build directory names from the raw HTML and the JSON details
+// payload would contain literal "&amp;".
+func TestParseDetailPage_DecodesHTMLEntities(t *testing.T) {
+	t.Parallel()
+	html := `<tr class="list_head"><td>Tyler Ward &amp; Lisa Cimorelli</td><td>Don&#39;t Stop &amp; Go</td></tr>`
+
+	details := parseDetailPage(html, 999)
+	if details.Artist != "Tyler Ward & Lisa Cimorelli" {
+		t.Errorf("Artist = %q, want %q", details.Artist, "Tyler Ward & Lisa Cimorelli")
+	}
+	if details.Title != "Don't Stop & Go" {
+		t.Errorf("Title = %q, want %q", details.Title, "Don't Stop & Go")
+	}
+}
+
 func TestExtractYouTubeID(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // CoverFetcher abstracts USDB.FetchCover for testability. Ready reports
@@ -54,6 +56,12 @@ const (
 // cacheDir == "" disables caching (every request hits upstream). Production
 // always passes a real directory; this fallback is for tests.
 func USDBCoverHandler(fetcher CoverFetcher, cacheDir string) http.Handler {
+	// Coalesce concurrent cache-miss fetches for the same song so a fresh
+	// page load that renders multiple covers (or two clients hitting the
+	// same uncached id) results in one upstream USDB call, not N. The
+	// shared result is the file written to disk; latecomers simply re-read
+	// the cache once the first request has populated it.
+	var inflight singleflight.Group
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		songID, err := strconv.Atoi(r.PathValue("id"))
 		if err != nil || songID <= 0 {
@@ -70,8 +78,63 @@ func USDBCoverHandler(fetcher CoverFetcher, cacheDir string) http.Handler {
 			writeUSDBNotReady(w)
 			return
 		}
+		// Coalesce concurrent fetches against USDB for the same id. The
+		// leader writes the cache file; followers wait, then re-check the
+		// cache and serve from disk (the post-leader path below). Only
+		// useful when caching is enabled — without a cacheDir there's
+		// nothing for followers to read.
+		if cacheDir != "" {
+			key := strconv.Itoa(songID)
+			reqCtx := r.Context()
+			//nolint:errcheck // value unused; singleflight is purely for coalescing
+			_, _, _ = inflight.Do(key, func() (any, error) {
+				populateCoverCache(reqCtx, fetcher, cacheDir, songID)
+				return struct{}{}, nil
+			})
+			if serveFromCoverCache(w, r, cacheDir, songID) {
+				return
+			}
+		}
+		// Cache disabled or population failed: fetch and stream directly.
 		fetchAndStreamCover(w, r, fetcher, cacheDir, songID)
 	})
+}
+
+// populateCoverCache fetches the cover and writes it to disk (or marks a
+// miss). Used as the singleflight body so concurrent cache-misses for the
+// same id collapse to one upstream call. Errors are best-effort: any
+// follower that finds the cache still empty after Do returns will fall
+// through to its own fetchAndStreamCover.
+func populateCoverCache(reqCtx context.Context, fetcher CoverFetcher, cacheDir string, songID int) {
+	ctx, cancel := context.WithTimeout(reqCtx, coverFetchTimeout)
+	defer cancel()
+	body, _, err := fetcher.FetchCover(ctx, songID)
+	if errors.Is(err, os.ErrNotExist) {
+		markCoverMiss(cacheDir, songID)
+		return
+	}
+	if err != nil {
+		return
+	}
+	defer body.Close()
+
+	cachePath, ok := openCoverCacheTmp(cacheDir, songID)
+	if !ok {
+		return
+	}
+	tmp, openErr := os.OpenFile( //nolint:gosec // path under controlled cacheDir
+		cachePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, coverCacheFilePerm,
+	)
+	if openErr != nil {
+		return
+	}
+	_, copyErr := io.Copy(tmp, body)
+	_ = tmp.Close()
+	if copyErr != nil {
+		_ = os.Remove(cachePath) //nolint:errcheck // best-effort cache cleanup
+		return
+	}
+	_ = os.Rename(cachePath, coverHitPath(cacheDir, songID)) //nolint:errcheck // best-effort cache write
 }
 
 // fetchAndStreamCover does the upstream fetch and tees into the cache file.

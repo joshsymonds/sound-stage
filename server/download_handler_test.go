@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,11 +23,11 @@ type mockDownloader struct {
 	notReady   bool // default false (= ready)
 }
 
-func (m *mockDownloader) GetSongDetails(_ int) (*usdb.SongDetails, error) {
+func (m *mockDownloader) GetSongDetails(_ context.Context, _ int) (*usdb.SongDetails, error) {
 	return &usdb.SongDetails{Artist: "Test", Title: "Song", YouTubeIDs: m.youTubeIDs}, nil
 }
 
-func (m *mockDownloader) GetSongTxt(_ int) (string, error) {
+func (m *mockDownloader) GetSongTxt(_ context.Context, _ int) (string, error) {
 	return "#TITLE:Song\n#ARTIST:Test\n#MP3:audio.webm\n: 0 5 10 Hello\nE\n", nil
 }
 

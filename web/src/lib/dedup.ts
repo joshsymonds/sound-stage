@@ -37,14 +37,30 @@ function normalize(s: string): string {
 }
 
 /**
- * Filters USDB results to those NOT already represented in the local
- * library. Matching is by normalized (artist, title); same title in two
- * different versions remains visible. Order of input is preserved.
+ * Builds the normalized-key set for a library. Pull this out into its own
+ * derivation so callers that re-filter often (e.g. Svelte $derived
+ * recomputing on each keystroke) don't re-normalize every library song
+ * per keystroke — only when the library itself changes.
  */
-export function dedupUSDBResults(library: Song[], results: USDBResult[]): USDBResult[] {
+export function libraryKeySet(library: Song[]): Set<string> {
   const known = new Set<string>();
   for (const song of library) {
     known.add(normalizeSongKey(song.artist, song.title));
   }
-  return results.filter((r) => !known.has(normalizeSongKey(r.artist, r.title)));
+  return known;
+}
+
+/**
+ * Filters USDB results to those NOT already represented in the local
+ * library. Matching is by normalized (artist, title); same title in two
+ * different versions remains visible. Order of input is preserved.
+ *
+ * Pass a precomputed key set when the library changes much less often than
+ * the search results (typical for the Browse view).
+ */
+export function dedupUSDBResults(
+  knownKeys: Set<string>,
+  results: USDBResult[],
+): USDBResult[] {
+  return results.filter((r) => !knownKeys.has(normalizeSongKey(r.artist, r.title)));
 }

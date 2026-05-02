@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dedupUSDBResults, normalizeSongKey } from "./dedup";
+import { dedupUSDBResults, libraryKeySet, normalizeSongKey } from "./dedup";
 import type { USDBResult } from "./api";
 import type { Song } from "./types";
 
@@ -67,19 +67,19 @@ describe("dedupUSDBResults", () => {
       usdb(3, "ABBA", "Dancing Queen"), // dup of library
       usdb(4, "Queen", "Killer Queen"), // not in library
     ];
-    const out = dedupUSDBResults(library, results);
+    const out = dedupUSDBResults(libraryKeySet(library), results);
     expect(out.map((r) => r.id)).toEqual([2, 4]);
   });
 
   it("returns all results when library is empty", () => {
     const results = [usdb(1, "Queen", "Bohemian Rhapsody")];
-    expect(dedupUSDBResults([], results)).toEqual(results);
+    expect(dedupUSDBResults(libraryKeySet([]), results)).toEqual(results);
   });
 
   it("returns empty when all results match the library", () => {
     const library = [lib("Queen", "Bohemian Rhapsody")];
     const results = [usdb(1, "Queen", "Bohemian Rhapsody")];
-    expect(dedupUSDBResults(library, results)).toEqual([]);
+    expect(dedupUSDBResults(libraryKeySet(library), results)).toEqual([]);
   });
 
   it("preserves order of remaining USDB results", () => {
@@ -89,13 +89,13 @@ describe("dedupUSDBResults", () => {
       usdb(2, "Queen", "B"), // dropped
       usdb(3, "Queen", "C"),
     ];
-    const out = dedupUSDBResults(library, results);
+    const out = dedupUSDBResults(libraryKeySet(library), results);
     expect(out.map((r) => r.id)).toEqual([1, 3]);
   });
 
   it("dedups across formatting variation (case, whitespace, smart quotes)", () => {
     const library = [lib("queen", "don't stop me now")];
     const results = [usdb(1, "Queen", "Don’t  Stop Me Now")];
-    expect(dedupUSDBResults(library, results)).toEqual([]);
+    expect(dedupUSDBResults(libraryKeySet(library), results)).toEqual([]);
   });
 });

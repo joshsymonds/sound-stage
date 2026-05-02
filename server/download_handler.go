@@ -20,11 +20,13 @@ import (
 
 // Downloader abstracts the USDB client for testing. Ready reports whether
 // the underlying client has logged in; the handler short-circuits with
-// HTTP 503 while it's false.
+// HTTP 503 while it's false. The fetch methods take a context so callers
+// can scope upstream calls to the request (or a longer-lived background
+// context for detached downloads).
 type Downloader interface {
 	Ready() bool
-	GetSongDetails(songID int) (*usdb.SongDetails, error)
-	GetSongTxt(songID int) (string, error)
+	GetSongDetails(ctx context.Context, songID int) (*usdb.SongDetails, error)
+	GetSongTxt(ctx context.Context, songID int) (string, error)
 	DownloadCover(songID int, songDir string) error
 }
 
@@ -197,7 +199,7 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 
 		// Already on disk: queue inline (no goroutine needed) and return.
 		if archiveSet.has(req.SongID) {
-			queueAlreadyDownloaded(dlConfig, req.SongID, req.Guest, logger)
+			queueAlreadyDownloaded(r.Context(), dlConfig, req.SongID, req.Guest, logger)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode( //nolint:gosec // best-effort
 				map[string]string{"status": "already_downloaded"},
@@ -219,9 +221,11 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 		// Kick off background download (intentionally detached from request context).
 		// runDownload owns the waiters list lifecycle — it always calls
 		// status.finish at the end (success or failure) so the pending map
-		// can't leak.
-		go func() { //nolint:contextcheck // background download outlives the HTTP request
-			runDownload(dlConfig, req.SongID, status, logger)
+		// can't leak. We use context.Background here on purpose: the caller's
+		// HTTP request finishes the moment we return 202, but the goroutine
+		// must keep running through the multi-second YouTube/yt-dlp work.
+		go func() { //nolint:contextcheck,gosec // intentional detach from request context (G118)
+			runDownload(context.Background(), dlConfig, req.SongID, status, logger)
 		}()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -237,8 +241,17 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 // success (download → /refresh OK), the drained guests are added to the
 // queue with a Song whose ID matches what USDX computes for the .txt content.
 //
+// The ctx scopes upstream USDB calls; pass context.Background() from the
+// HTTP handler since downloads intentionally outlive the request.
+//
 // Returns no error — failures are logged and the queue is simply not updated.
-func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, logger *slog.Logger) {
+func runDownload(
+	ctx context.Context,
+	dlConfig DownloadConfig,
+	songID int,
+	status *downloadStatus,
+	logger *slog.Logger,
+) {
 	var queued *Song // populated only on full success
 	defer func() {
 		guests := status.finish(songID)
@@ -250,17 +263,19 @@ func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, lo
 		}
 	}()
 
-	logger.Info("starting download", "song_id", songID)
+	logger.InfoContext(ctx, "starting download", "song_id", songID)
 
-	details, err := dlConfig.Client.GetSongDetails(songID)
+	details, err := dlConfig.Client.GetSongDetails(ctx, songID)
 	if err != nil {
-		logger.Error("download failed", "song_id", songID, "error", fmt.Errorf("fetching song details: %w", err))
+		logger.ErrorContext(ctx, "download failed", "song_id", songID,
+			"error", fmt.Errorf("fetching song details: %w", err))
 		return
 	}
 
-	txt, err := dlConfig.Client.GetSongTxt(songID)
+	txt, err := dlConfig.Client.GetSongTxt(ctx, songID)
 	if err != nil {
-		logger.Error("download failed", "song_id", songID, "error", fmt.Errorf("getting song txt: %w", err))
+		logger.ErrorContext(ctx, "download failed", "song_id", songID,
+			"error", fmt.Errorf("getting song txt: %w", err))
 		return
 	}
 
@@ -269,7 +284,8 @@ func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, lo
 
 	song, err := usdb.PrepareSong(txt, details, songDir)
 	if err != nil {
-		logger.Error("download failed", "song_id", songID, "error", fmt.Errorf("preparing song: %w", err))
+		logger.ErrorContext(ctx, "download failed", "song_id", songID,
+			"error", fmt.Errorf("preparing song: %w", err))
 		return
 	}
 
@@ -280,18 +296,18 @@ func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, lo
 			// Demote those to Debug so production logs aren't drowned in
 			// false-alarm Warns; reserve Warn for transient failures.
 			if errors.Is(coverErr, os.ErrNotExist) {
-				logger.Debug("no cover available", "song_id", songID)
+				logger.DebugContext(ctx, "no cover available", "song_id", songID)
 			} else {
-				logger.Warn("cover download failed", "song_id", songID, "error", coverErr)
+				logger.WarnContext(ctx, "cover download failed", "song_id", songID, "error", coverErr)
 			}
 		}
 	}
 
 	if song.YouTubeURL == "" {
-		logger.Warn("no YouTube URL found", "song_id", songID)
+		logger.WarnContext(ctx, "no YouTube URL found", "song_id", songID)
 
 		if markErr := archive.MarkDownloaded(dlConfig.OutputDir, songID); markErr != nil {
-			logger.Error("marking downloaded", "song_id", songID, "error", markErr)
+			logger.ErrorContext(ctx, "marking downloaded", "song_id", songID, "error", markErr)
 		}
 
 		// Skip notifyDeck and skip queueing: without audio/video the Deck
@@ -304,7 +320,7 @@ func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, lo
 	if !fetchMedia(dlConfig.YtDlp, song, songDir, songID, logger) {
 		return
 	}
-	queued = finalizeDownload(dlConfig, song.TxtPath, songID, logger)
+	queued = finalizeDownload(ctx, dlConfig, song.TxtPath, songID, logger)
 }
 
 // finalizeDownload runs the post-media-download tail: marks the archive,
@@ -312,9 +328,15 @@ func runDownload(dlConfig DownloadConfig, songID int, status *downloadStatus, lo
 // build a Song for auto-queue. Returns nil if any step that gates queueing
 // failed (mark error, /refresh error, parse error). Library invalidate and
 // notifyDeck are skipped when their respective config is unset.
-func finalizeDownload(dlConfig DownloadConfig, txtPath string, songID int, logger *slog.Logger) *Song {
+func finalizeDownload(
+	ctx context.Context,
+	dlConfig DownloadConfig,
+	txtPath string,
+	songID int,
+	logger *slog.Logger,
+) *Song {
 	if markErr := archive.MarkDownloaded(dlConfig.OutputDir, songID); markErr != nil {
-		logger.Error("marking downloaded", "song_id", songID, "error", markErr)
+		logger.ErrorContext(ctx, "marking downloaded", "song_id", songID, "error", markErr)
 		return nil
 	}
 	if dlConfig.InvalidateLibrary != nil {
@@ -322,12 +344,12 @@ func finalizeDownload(dlConfig DownloadConfig, txtPath string, songID int, logge
 	}
 	// With a configured Deck, /refresh must succeed before queueing — otherwise
 	// USDX doesn't know the song and the queue driver would 404 on stage.
-	if dlConfig.DeckURL != "" && !notifyDeck(dlConfig.HTTPClient, dlConfig.DeckURL, txtPath, logger) {
+	if dlConfig.DeckURL != "" && !notifyDeck(ctx, dlConfig.HTTPClient, dlConfig.DeckURL, txtPath, logger) {
 		return nil
 	}
 	parsed, parseErr := txtparse.Parse(txtPath)
 	if parseErr != nil {
-		logger.Error("parse txt for auto-queue", "song_id", songID, "error", parseErr)
+		logger.ErrorContext(ctx, "parse txt for auto-queue", "song_id", songID, "error", parseErr)
 		return nil
 	}
 	return &Song{
@@ -348,20 +370,27 @@ func finalizeDownload(dlConfig DownloadConfig, txtPath string, songID int, logge
 // Failure modes are logged but never returned: the HTTP response is already
 // "already_downloaded" — surfacing a 500 for an edge case (archive entry
 // without a .txt) would be more confusing than a silent skip.
-func queueAlreadyDownloaded(dlConfig DownloadConfig, songID int, guest string, logger *slog.Logger) {
+func queueAlreadyDownloaded(
+	ctx context.Context,
+	dlConfig DownloadConfig,
+	songID int,
+	guest string,
+	logger *slog.Logger,
+) {
 	if dlConfig.Queue == nil {
 		return
 	}
-	details, err := dlConfig.Client.GetSongDetails(songID)
+	details, err := dlConfig.Client.GetSongDetails(ctx, songID)
 	if err != nil {
-		logger.Warn("auto-queue: get song details failed", "song_id", songID, "error", err)
+		logger.WarnContext(ctx, "auto-queue: get song details failed",
+			"song_id", songID, "error", err)
 		return
 	}
 	dirName := usdb.SanitizePath(fmt.Sprintf("%s - %s", details.Artist, details.Title))
 	txtPath := filepath.Join(dlConfig.OutputDir, dirName, "song.txt")
 	parsed, parseErr := txtparse.Parse(txtPath)
 	if parseErr != nil {
-		logger.Warn("auto-queue: parse existing .txt failed",
+		logger.WarnContext(ctx, "auto-queue: parse existing .txt failed",
 			"song_id", songID, "path", txtPath, "error", parseErr)
 		return
 	}
@@ -392,7 +421,8 @@ func fetchMedia(dl YtDlp, song *usdb.PreparedSong, songDir string, songID int, l
 	wg.Wait()
 
 	if audioErr != nil {
-		logger.Error("download failed", "song_id", songID, "error", fmt.Errorf("downloading audio: %w", audioErr))
+		logger.Error("download failed", "song_id", songID,
+			"error", fmt.Errorf("downloading audio: %w", audioErr))
 		return false
 	}
 	if videoErr != nil {
@@ -405,40 +435,40 @@ func fetchMedia(dl YtDlp, song *usdb.PreparedSong, songDir string, songID int, l
 // the newly-downloaded song. Returns true iff the Deck responded HTTP 200.
 // Failures are logged but do not panic — the download itself succeeded.
 // A nil client falls back to http.DefaultClient (test convenience).
-func notifyDeck(client *http.Client, deckURL, txtPath string, logger *slog.Logger) bool {
+func notifyDeck(parentCtx context.Context, client *http.Client, deckURL, txtPath string, logger *slog.Logger) bool {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	body, err := json.Marshal(map[string]string{"path": txtPath})
 	if err != nil {
-		logger.Warn("marshal /refresh payload", "error", err)
+		logger.WarnContext(parentCtx, "marshal /refresh payload", "error", err)
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), proxyTimeout)
+	ctx, cancel := context.WithTimeout(parentCtx, proxyTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, deckURL+"/refresh", bytes.NewReader(body))
 	if err != nil {
-		logger.Warn("build /refresh request", "error", err)
+		logger.WarnContext(ctx, "build /refresh request", "error", err)
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.Warn("deck unreachable for /refresh", "error", err)
+		logger.WarnContext(ctx, "deck unreachable for /refresh", "error", err)
 		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Warn("deck /refresh returned non-200",
+		logger.WarnContext(ctx, "deck /refresh returned non-200",
 			"status", resp.StatusCode,
 			"path", txtPath,
 		)
 		return false
 	}
-	logger.Debug("deck accepted /refresh", "path", txtPath)
+	logger.DebugContext(ctx, "deck accepted /refresh", "path", txtPath)
 	return true
 }

@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, idStr := range ids {
-		if err := downloadSong(client, dl, idStr, downloaded); err != nil {
+		if err := downloadSong(cmd.Context(), client, dl, idStr, downloaded); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "error downloading %s: %v\n", idStr, err)
 			continue
 		}
@@ -109,7 +110,13 @@ func collectIDs(args []string, fromFile string) ([]string, error) {
 	return ids, nil
 }
 
-func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string, downloaded map[int]struct{}) error {
+func downloadSong(
+	ctx context.Context,
+	client *usdb.Client,
+	dl ytdlp.Downloader,
+	idStr string,
+	downloaded map[int]struct{},
+) error {
 	var id int
 	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
 		return fmt.Errorf("invalid song ID %q", idStr)
@@ -123,12 +130,12 @@ func downloadSong(client *usdb.Client, dl ytdlp.Downloader, idStr string, downlo
 
 	fmt.Printf("Fetching song #%d from USDB...\n", id)
 
-	details, err := client.GetSongDetails(id)
+	details, err := client.GetSongDetails(ctx, id)
 	if err != nil {
 		return fmt.Errorf("fetching song details: %w", err)
 	}
 
-	txt, err := client.GetSongTxt(id)
+	txt, err := client.GetSongTxt(ctx, id)
 	if err != nil {
 		return fmt.Errorf("getting song txt: %w", err)
 	}

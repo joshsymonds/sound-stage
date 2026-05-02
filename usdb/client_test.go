@@ -1,6 +1,7 @@
 package usdb
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -37,7 +38,7 @@ func TestGetSongTxt_RateLimitRetry(t *testing.T) {
 		sleepDuration = d
 	}
 
-	txt, err := client.getSongTxt(12345, fakeSleep)
+	txt, err := client.getSongTxt(context.Background(), 12345, fakeSleep)
 	if err != nil {
 		t.Fatalf("getSongTxt: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestGetSongTxt_RateLimitExhausted(t *testing.T) {
 	}
 	fakeSleep := func(_ time.Duration) {}
 
-	_, err := client.getSongTxt(12345, fakeSleep)
+	_, err := client.getSongTxt(context.Background(), 12345, fakeSleep)
 	if err == nil {
 		t.Fatal("expected error after exhausting retries, got nil")
 	}

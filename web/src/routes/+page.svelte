@@ -20,7 +20,7 @@
   import NowPlaying from "$lib/components/NowPlaying.svelte";
   import QueueItem from "$lib/components/QueueItem.svelte";
   import SongCard from "$lib/components/SongCard.svelte";
-  import { dedupUSDBResults } from "$lib/dedup";
+  import { dedupUSDBResults, libraryKeySet } from "$lib/dedup";
   import { displayElapsed } from "$lib/elapsed";
   import { clearGuestName, getGuestName, setGuestName } from "$lib/stores/session";
   import type { NowPlayingState, QueueEntry, Song } from "$lib/types";
@@ -70,8 +70,11 @@
   const isSearching = $derived(searchQuery.trim().length >= SEARCH_MIN_CHARS);
   // USDB results minus anything already in the library (normalized match).
   // Keeps "Bohemian Rhapsody (Live Aid)" visible alongside a library
-  // "Bohemian Rhapsody" because the titles differ.
-  const dedupedUSDB = $derived(dedupUSDBResults(songs, searchResults));
+  // "Bohemian Rhapsody" because the titles differ. The library-key set is
+  // its own derivation so typing in the search box only re-runs the cheap
+  // filter, not the full library normalization.
+  const libraryKeys = $derived(libraryKeySet(songs));
+  const dedupedUSDB = $derived(dedupUSDBResults(libraryKeys, searchResults));
   // Smoothly-advancing elapsed time. Anchored to the server value at the
   // last poll, projected forward by (tickNow - lastPolledAt). Clamped to
   // duration so it never overshoots; pauses correctly when paused === true.
@@ -145,7 +148,11 @@
       queue = queueData;
       nowPlaying = nowPlayingData;
       deckStatus = deckStatusData;
-      // Re-anchor the elapsed projection to this server value.
+      // Re-anchor the elapsed projection to this server value. Failures
+      // intentionally leave the anchor untouched so the local tick keeps
+      // advancing through transient network glitches; the next successful
+      // poll re-syncs and the duration clamp prevents overshoot if the
+      // outage outlasts the song.
       lastPolledAt = Date.now();
     } catch {
       // Polling failures are non-critical.
