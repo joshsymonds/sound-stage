@@ -41,13 +41,16 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 }
 
-func runSearch(_ *cobra.Command, _ []string) error {
+func runSearch(cmd *cobra.Command, _ []string) error {
 	if err := requireCredentials(); err != nil {
 		return err
 	}
 
 	client, err := usdb.NewClient(username, password)
 	if err != nil {
+		return fmt.Errorf("creating USDB client: %w", err)
+	}
+	if err := client.Login(cmd.Context()); err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}
 

@@ -20,9 +20,10 @@ import (
 // fakeCoverFetcher counts FetchCover calls so tests can assert that a cache
 // hit truly skips upstream.
 type fakeCoverFetcher struct {
-	body  string
-	err   error
-	calls atomic.Int32
+	body     string
+	err      error
+	calls    atomic.Int32
+	notReady bool // default false (= ready)
 }
 
 func (f *fakeCoverFetcher) FetchCover(_ context.Context, _ int) (io.ReadCloser, string, error) {
@@ -32,6 +33,8 @@ func (f *fakeCoverFetcher) FetchCover(_ context.Context, _ int) (io.ReadCloser, 
 	}
 	return io.NopCloser(strings.NewReader(f.body)), "image/jpeg", nil
 }
+
+func (f *fakeCoverFetcher) Ready() bool { return !f.notReady }
 
 // usdbCoverMux mounts the cover handler so r.PathValue resolves correctly.
 func usdbCoverMux(fetcher server.CoverFetcher, cacheDir string) http.Handler {
@@ -171,6 +174,44 @@ func TestUSDBCoverHandler(t *testing.T) {
 		usdbCoverMux(fetcher, t.TempDir()).ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadGateway {
 			t.Fatalf("expected 502, got %d", rec.Code)
+		}
+	})
+
+	t.Run("503 with Retry-After when not ready", func(t *testing.T) {
+		t.Parallel()
+		fetcher := &fakeCoverFetcher{notReady: true}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/usdb/cover/42", nil)
+		usdbCoverMux(fetcher, t.TempDir()).ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", rec.Code)
+		}
+		if got := rec.Header().Get("Retry-After"); got == "" {
+			t.Error("expected Retry-After header")
+		}
+		if calls := fetcher.calls.Load(); calls != 0 {
+			t.Errorf("upstream FetchCover should not be called when not ready, got %d calls", calls)
+		}
+	})
+
+	t.Run("cached hit served even when not ready", func(t *testing.T) {
+		t.Parallel()
+		// A previously-cached cover survives a USDB outage: the handler
+		// answers from disk without consulting Ready().
+		cacheDir := t.TempDir()
+		hitPath := filepath.Join(cacheDir, "7.jpg")
+		if err := os.WriteFile(hitPath, []byte("CACHED"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fetcher := &fakeCoverFetcher{notReady: true}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/usdb/cover/7", nil)
+		usdbCoverMux(fetcher, cacheDir).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 from cache, got %d", rec.Code)
+		}
+		if calls := fetcher.calls.Load(); calls != 0 {
+			t.Errorf("upstream FetchCover should not be called for a cached hit, got %d calls", calls)
 		}
 	})
 }

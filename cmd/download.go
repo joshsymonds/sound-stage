@@ -58,6 +58,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	client, err := usdb.NewClient(username, password)
 	if err != nil {
+		return fmt.Errorf("creating USDB client: %w", err)
+	}
+	if err := client.Login(cmd.Context()); err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}
 

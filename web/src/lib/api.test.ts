@@ -9,6 +9,7 @@ import {
   removeFromQueue,
   searchUSDB,
   triggerDownload,
+  USDBNotReadyError,
 } from "./api";
 import type { QueueEntry, Song } from "./types";
 
@@ -121,6 +122,14 @@ describe("API client", () => {
     await expect(searchUSDB({ title: "test" })).rejects.toThrow("search USDB");
   });
 
+  it("searchUSDB throws USDBNotReadyError on 503", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("USDB not ready", { status: 503 }),
+    );
+
+    await expect(searchUSDB({ title: "test" })).rejects.toBeInstanceOf(USDBNotReadyError);
+  });
+
   it("triggerDownload calls POST /api/download with songId and guest", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response(JSON.stringify({ status: "downloading" }), { status: 202 }),
@@ -141,6 +150,14 @@ describe("API client", () => {
     );
 
     await expect(triggerDownload(0, "Alice")).rejects.toThrow("trigger download");
+  });
+
+  it("triggerDownload throws USDBNotReadyError on 503", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("USDB not ready", { status: 503 }),
+    );
+
+    await expect(triggerDownload(99, "Alice")).rejects.toBeInstanceOf(USDBNotReadyError);
   });
 
   it("removeFromQueue calls DELETE /api/queue/N?guest=NAME", async () => {

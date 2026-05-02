@@ -7,14 +7,33 @@ import (
 	"github.com/joshsymonds/sound-stage/usdb"
 )
 
-// USDBSearcher abstracts the USDB search capability for testing.
+// USDBSearcher abstracts the USDB search capability for testing. Ready
+// reports whether the underlying client has logged in; while false the
+// handler short-circuits with HTTP 503 so the client knows to retry.
 type USDBSearcher interface {
+	Ready() bool
 	Search(params usdb.SearchParams) ([]usdb.Song, error)
+}
+
+// usdbNotReadyRetryAfter is the Retry-After value sent on 503 responses
+// from USDB-gated endpoints. 5 seconds is short enough that the user's
+// next interaction will land roughly when login completes.
+const usdbNotReadyRetryAfter = "5"
+
+// writeUSDBNotReady writes a 503 with a Retry-After header. Used by all
+// USDB-backed handlers to signal "login still in flight".
+func writeUSDBNotReady(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", usdbNotReadyRetryAfter)
+	http.Error(w, "USDB not ready", http.StatusServiceUnavailable)
 }
 
 // USDBSearchHandler returns search results from USDB.
 func USDBSearchHandler(searcher USDBSearcher) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !searcher.Ready() {
+			writeUSDBNotReady(w)
+			return
+		}
 		query := r.URL.Query()
 		artist := query.Get("artist")
 		title := query.Get("title")

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -69,22 +71,20 @@ func runServe(_ *cobra.Command, _ []string) error {
 		DelyricURL:  serveDelyricURL,
 	}
 
-	// Set up USDB search and download if credentials are available.
-	if username != "" && password != "" {
-		client, err := usdb.NewClient(username, password)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "USDB login failed (search/download disabled): %v\n", err)
-		} else {
-			cfg.Searcher = client
-			cfg.CoverFetcher = client
-			cfg.Download = &server.DownloadConfig{
-				Client:    client,
-				YtDlp:     ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight},
-				OutputDir: outputDir,
-				DeckURL:   serveDeckURL,
-			}
-			fmt.Fprintln(os.Stderr, "USDB search and download enabled")
-		}
+	// Construct the USDB client up front. This is offline (no network), so
+	// it never blocks the listener bind below. Login happens concurrently in
+	// a goroutine; until it lands, USDB-gated handlers return HTTP 503.
+	client, err := usdb.NewClient(username, password)
+	if err != nil {
+		return fmt.Errorf("creating USDB client: %w", err)
+	}
+	cfg.Searcher = client
+	cfg.CoverFetcher = client
+	cfg.Download = &server.DownloadConfig{
+		Client:    client,
+		YtDlp:     ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight},
+		OutputDir: outputDir,
+		DeckURL:   serveDeckURL,
 	}
 
 	queue := server.NewQueue()
@@ -118,7 +118,24 @@ func runServe(_ *cobra.Command, _ []string) error {
 		}
 	}()
 
+	// Run USDB login concurrently with serving. While it's in progress,
+	// /api/usdb/search and /api/download return 503 with Retry-After. With
+	// no credentials configured, LoginAsync is a no-op and those endpoints
+	// return 503 indefinitely — the operator's signal that USDB isn't set up.
+	loginCtx, loginCancel := context.WithCancel(context.Background())
+	defer loginCancel()
+	if username == "" || password == "" {
+		fmt.Fprintln(os.Stderr,
+			"USDB credentials not set — search and download will return 503")
+	}
+	go func() {
+		if err := client.LoginAsync(loginCtx); err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintf(os.Stderr, "USDB login: %v\n", err)
+		}
+	}()
+
 	<-stop
+	loginCancel()
 	if driver != nil {
 		driver.Stop()
 	}

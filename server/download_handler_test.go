@@ -19,6 +19,7 @@ import (
 
 type mockDownloader struct {
 	youTubeIDs []string
+	notReady   bool // default false (= ready)
 }
 
 func (m *mockDownloader) GetSongDetails(_ int) (*usdb.SongDetails, error) {
@@ -32,6 +33,8 @@ func (m *mockDownloader) GetSongTxt(_ int) (string, error) {
 func (m *mockDownloader) DownloadCover(_ int, _ string) error {
 	return nil
 }
+
+func (m *mockDownloader) Ready() bool { return !m.notReady }
 
 // mockYtDlp is a no-op yt-dlp stand-in — its methods return nil without
 // spawning the yt-dlp binary so tests can exercise the full download happy
@@ -117,6 +120,25 @@ func TestDownloadHandler(t *testing.T) {
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("503 with Retry-After when not ready", func(t *testing.T) {
+		t.Parallel()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:    &mockDownloader{notReady: true},
+			YtDlp:     &mockYtDlp{},
+			OutputDir: t.TempDir(),
+		})
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Retry-After"); got == "" {
+			t.Error("expected Retry-After header on 503 response")
 		}
 	})
 

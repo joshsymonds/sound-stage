@@ -11,6 +11,7 @@
     resumePlayback,
     searchUSDB,
     triggerDownload,
+    USDBNotReadyError,
   } from "$lib/api";
   import type { DeckStatus, USDBResult } from "$lib/api";
   import AppShell from "$lib/components/AppShell.svelte";
@@ -160,7 +161,11 @@
       if ((err as { name?: string }).name === "AbortError") return;
       if (searchAbort === controller) {
         searchResults = [];
-        showError("Search failed");
+        if (err instanceof USDBNotReadyError) {
+          showError("USDB warming up — try again in a moment");
+        } else {
+          showError("Search failed");
+        }
       }
     } finally {
       if (searchAbort === controller) {
@@ -190,8 +195,12 @@
     try {
       await triggerDownload(result.id, guestName);
       activeTab = "queue";
-    } catch {
-      showError("Download failed");
+    } catch (err) {
+      if (err instanceof USDBNotReadyError) {
+        showError("USDB warming up — try again in a moment");
+      } else {
+        showError("Download failed");
+      }
     }
   }
 

@@ -13,13 +13,16 @@ import (
 )
 
 type mockSearcher struct {
-	results []usdb.Song
-	err     error
+	results  []usdb.Song
+	err      error
+	notReady bool // default false (= ready) so existing tests don't need updates
 }
 
 func (m *mockSearcher) Search(_ usdb.SearchParams) ([]usdb.Song, error) {
 	return m.results, m.err
 }
+
+func (m *mockSearcher) Ready() bool { return !m.notReady }
 
 func TestUSDBSearchHandler(t *testing.T) {
 	t.Parallel()
@@ -89,6 +92,21 @@ func TestUSDBSearchHandler(t *testing.T) {
 
 		if rec.Code != http.StatusBadGateway {
 			t.Fatalf("expected 502, got %d", rec.Code)
+		}
+	})
+
+	t.Run("returns 503 with Retry-After when not ready", func(t *testing.T) {
+		t.Parallel()
+		searcher := &mockSearcher{notReady: true}
+		handler := server.USDBSearchHandler(searcher)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/usdb/search?title=test", nil))
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", rec.Code)
+		}
+		if got := rec.Header().Get("Retry-After"); got == "" {
+			t.Error("expected Retry-After header on 503 response")
 		}
 	})
 }

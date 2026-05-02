@@ -12,6 +12,17 @@ export interface DeckStatus {
   lastSeenSecondsAgo: number | null;
 }
 
+// USDBNotReadyError signals that the server returned 503 from a USDB-gated
+// endpoint because login is still in flight (or USDB credentials weren't
+// configured at all). Callers branch on this to show a friendlier toast
+// than a generic failure message.
+export class USDBNotReadyError extends Error {
+  constructor() {
+    super("USDB not ready");
+    this.name = "USDBNotReadyError";
+  }
+}
+
 export async function fetchSongs(): Promise<Song[]> {
   const response = await fetch("/api/songs");
   if (!response.ok) {
@@ -57,6 +68,9 @@ export async function searchUSDB(
   if (params.edition) query.set("edition", params.edition);
 
   const response = await fetch(`/api/usdb/search?${query.toString()}`, { signal });
+  if (response.status === 503) {
+    throw new USDBNotReadyError();
+  }
   if (!response.ok) {
     throw new Error(`Failed to search USDB: ${String(response.status)}`);
   }
@@ -69,6 +83,9 @@ export async function triggerDownload(songId: number, guest: string): Promise<st
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ songId, guest }),
   });
+  if (response.status === 503) {
+    throw new USDBNotReadyError();
+  }
   if (!response.ok) {
     throw new Error(`Failed to trigger download: ${String(response.status)}`);
   }

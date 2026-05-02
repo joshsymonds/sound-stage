@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,10 +23,15 @@ const baseURL = "https://usdb.animux.de/"
 // httpTimeout is the timeout for all USDB HTTP requests.
 const httpTimeout = 30 * time.Second
 
-// Client is an authenticated USDB HTTP client.
+// Client is a USDB HTTP client. Construction is cheap and offline; call
+// Login (or LoginAsync) before invoking any method that hits USDB. Ready
+// reports whether a login has succeeded.
 type Client struct {
-	http    *http.Client
-	baseURL string
+	http     *http.Client
+	baseURL  string
+	username string
+	password string
+	ready    atomic.Bool
 }
 
 // Song represents a search result from USDB.
@@ -51,55 +58,133 @@ type SearchParams struct {
 	Limit   int
 }
 
-// NewClient logs in to USDB and returns an authenticated client.
+// NewClient constructs a USDB client without contacting the network. The
+// returned client reports Ready() == false until Login or LoginAsync
+// succeeds. Empty credentials are allowed at construction time so callers
+// can build a fully-wired server even when USDB is unconfigured; Login then
+// returns a credentials error and Ready stays false.
 func NewClient(username, password string) (*Client, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating cookie jar: %w", err)
 	}
+	return &Client{
+		http:     &http.Client{Jar: jar, Timeout: httpTimeout},
+		baseURL:  baseURL,
+		username: username,
+		password: password,
+	}, nil
+}
 
-	client := &Client{
-		http: &http.Client{
-			Jar:     jar,
-			Timeout: httpTimeout,
-		},
-		baseURL: baseURL,
+// Ready reports whether this client has a valid USDB session. Handlers that
+// proxy to USDB use this to short-circuit with HTTP 503 before login lands.
+func (c *Client) Ready() bool {
+	return c.ready.Load()
+}
+
+// errMissingCredentials is returned by Login when credentials weren't
+// configured. LoginAsync treats this as a permanent decision (do nothing,
+// stay not-ready) rather than retrying.
+var errMissingCredentials = errors.New("USDB credentials not configured")
+
+// Login performs a single login attempt. On success, Ready() flips to true.
+// On any failure, Ready stays false and the error is returned for the caller
+// to log or retry.
+func (c *Client) Login(ctx context.Context) error {
+	if c.username == "" || c.password == "" {
+		return errMissingCredentials
 	}
 
 	data := url.Values{
-		"user":  {username},
-		"pass":  {password},
+		"user":  {c.username},
+		"pass":  {c.password},
 		"login": {"Login"},
 	}
 
 	req, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		client.baseURL,
+		ctx, http.MethodPost, c.baseURL,
 		strings.NewReader(data.Encode()),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("creating login request: %w", err)
+		return fmt.Errorf("creating login request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := client.http.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("login request: %w", err)
+		return fmt.Errorf("login request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("login returned HTTP %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading login response: %w", err)
+		return fmt.Errorf("reading login response: %w", err)
 	}
-
 	if strings.Contains(string(body), "Login or Password invalid") {
-		return nil, fmt.Errorf("invalid USDB credentials")
+		return errors.New("invalid USDB credentials")
 	}
 
-	return client, nil
+	c.ready.Store(true)
+	return nil
+}
+
+// loginBackoffSchedule controls LoginAsync's wait between attempts. The
+// final value is reused indefinitely so the loop never gives up while the
+// process is alive — operators see slow log growth on permanent auth
+// failure rather than a one-shot abandonment.
+//
+//nolint:gochecknoglobals // configuration constant; can't be const because slice.
+var loginBackoffSchedule = []time.Duration{
+	1 * time.Second,
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	16 * time.Second,
+	30 * time.Second,
+}
+
+// LoginAsync runs Login in a loop with exponential backoff until success or
+// context cancellation. Returns nil on successful login (Ready() == true),
+// ctx.Err() on cancellation. With no credentials configured, returns nil
+// immediately and Ready() stays false — the caller's startup path doesn't
+// loop for nothing.
+func (c *Client) LoginAsync(ctx context.Context) error {
+	return c.loginAsync(ctx, loginBackoffSchedule)
+}
+
+func (c *Client) loginAsync(ctx context.Context, backoff []time.Duration) error {
+	for attempt := 0; ; attempt++ {
+		err := c.Login(ctx)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errMissingCredentials) {
+			// No credentials configured: nothing to retry.
+			return nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("usdb login: %w", err)
+		}
+
+		wait := backoff[len(backoff)-1]
+		if attempt < len(backoff) {
+			wait = backoff[attempt]
+		}
+		slog.Default().WarnContext(ctx, "usdb login failed; will retry",
+			"attempt", attempt+1, "wait", wait, "error", err)
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("usdb login: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 // Search queries USDB for songs matching the given params.

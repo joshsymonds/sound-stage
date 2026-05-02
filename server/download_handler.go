@@ -18,8 +18,11 @@ import (
 	"github.com/joshsymonds/sound-stage/usdb"
 )
 
-// Downloader abstracts the USDB client for testing.
+// Downloader abstracts the USDB client for testing. Ready reports whether
+// the underlying client has logged in; the handler short-circuits with
+// HTTP 503 while it's false.
 type Downloader interface {
+	Ready() bool
 	GetSongDetails(songID int) (*usdb.SongDetails, error)
 	GetSongTxt(songID int) (string, error)
 	DownloadCover(songID int, songDir string) error
@@ -172,6 +175,10 @@ func DownloadHandler(dlConfig DownloadConfig) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !dlConfig.Client.Ready() {
+			writeUSDBNotReady(w)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		var req downloadRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

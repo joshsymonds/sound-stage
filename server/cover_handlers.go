@@ -13,8 +13,10 @@ import (
 	"time"
 )
 
-// CoverFetcher abstracts USDB.FetchCover for testability.
+// CoverFetcher abstracts USDB.FetchCover for testability. Ready reports
+// whether the underlying client has logged in.
 type CoverFetcher interface {
+	Ready() bool
 	FetchCover(ctx context.Context, songID int) (io.ReadCloser, string, error)
 }
 
@@ -58,7 +60,14 @@ func USDBCoverHandler(fetcher CoverFetcher, cacheDir string) http.Handler {
 			http.Error(w, "valid id is required", http.StatusBadRequest)
 			return
 		}
+		// Cached hits/misses don't need an authenticated session, so they
+		// short-circuit the readiness gate. This keeps already-fetched
+		// covers visible during a USDB outage.
 		if cacheDir != "" && serveFromCoverCache(w, r, cacheDir, songID) {
+			return
+		}
+		if !fetcher.Ready() {
+			writeUSDBNotReady(w)
 			return
 		}
 		fetchAndStreamCover(w, r, fetcher, cacheDir, songID)

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -93,6 +94,58 @@ func TestSPAFallback(t *testing.T) {
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nonexistent", nil))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("expected 404 (no SPA fallback), got %d", rec.Code)
+		}
+	})
+}
+
+// TestUSDBNotReady_NonUSDBRoutesUnaffected exercises the full mux with a
+// searcher whose Ready() reports false to prove that non-USDB endpoints
+// keep working while USDB login is still in flight. This is the property
+// that makes serve.go's "bind first, login asynchronously" arrangement
+// useful — without it the user would see a frozen app at startup.
+func TestUSDBNotReady_NonUSDBRoutesUnaffected(t *testing.T) {
+	t.Parallel()
+
+	libraryDir := t.TempDir()
+	handler := server.Handler(server.Config{
+		Port:       "0",
+		LibraryDir: libraryDir,
+		Searcher:   &mockSearcher{notReady: true},
+	})
+
+	t.Run("library is reachable", func(t *testing.T) {
+		t.Parallel()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/songs", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("queue is reachable", func(t *testing.T) {
+		t.Parallel()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/queue", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("USDB search returns 503", func(t *testing.T) {
+		t.Parallel()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/usdb/search?title=test", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", rec.Code)
+		}
+		if got := rec.Header().Get("Retry-After"); got == "" {
+			t.Error("expected Retry-After header on 503")
+		}
+		// Body is human-readable; just confirm it's not empty so a curl
+		// user gets a hint about what's happening.
+		body, _ := io.ReadAll(rec.Result().Body)
+		if !strings.Contains(string(body), "USDB") {
+			t.Errorf("expected body to mention USDB, got %q", body)
 		}
 	})
 }
