@@ -21,11 +21,16 @@
   import QueueItem from "$lib/components/QueueItem.svelte";
   import SongCard from "$lib/components/SongCard.svelte";
   import { dedupUSDBResults } from "$lib/dedup";
+  import { displayElapsed } from "$lib/elapsed";
   import { clearGuestName, getGuestName, setGuestName } from "$lib/stores/session";
   import type { NowPlayingState, QueueEntry, Song } from "$lib/types";
   import { onMount } from "svelte";
 
   const POLL_INTERVAL = 5000;
+  // Drives the per-second extrapolation of elapsed time between polls.
+  // 250ms is smooth enough for second-resolution display without burning
+  // CPU; setInterval (not RAF) keeps ticking when the tab is hidden.
+  const TICK_INTERVAL = 250;
 
   let guestName = $state<string | null>(null);
   let activeTab = $state<"playing" | "queue" | "browse">("playing");
@@ -41,6 +46,13 @@
   let errorMessage = $state<string | null>(null);
   let downloadingIds = $state<Set<number>>(new Set());
   let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+  let tickTimer: ReturnType<typeof setInterval> | null = null;
+  // Wall-clock anchor: Date.now() at the moment nowPlaying was last received.
+  // Re-set on every successful poll so the projection re-syncs to truth.
+  let lastPolledAt = $state(Date.now());
+  // Reactive "now" used by the elapsed projection. Updated every TICK_INTERVAL
+  // ms, which is what makes the displayed time advance between polls.
+  let tickNow = $state(Date.now());
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let searchAbort: AbortController | null = null;
   const SEARCH_DEBOUNCE_MS = 300;
@@ -60,6 +72,20 @@
   // Keeps "Bohemian Rhapsody (Live Aid)" visible alongside a library
   // "Bohemian Rhapsody" because the titles differ.
   const dedupedUSDB = $derived(dedupUSDBResults(songs, searchResults));
+  // Smoothly-advancing elapsed time. Anchored to the server value at the
+  // last poll, projected forward by (tickNow - lastPolledAt). Clamped to
+  // duration so it never overshoots; pauses correctly when paused === true.
+  const displayedElapsed = $derived(
+    nowPlaying === null
+      ? 0
+      : displayElapsed(
+          nowPlaying.elapsed,
+          lastPolledAt,
+          tickNow,
+          nowPlaying.duration,
+          paused,
+        ),
+  );
 
   // Derive ordered (guest, count) pairs from the queue. Insertion-order is
   // preserved by Map, which mirrors the round-robin guestOrder on the server.
@@ -81,9 +107,18 @@
 
     // Start polling when the app loads.
     startPolling();
+    // The tick loop is independent of polling: it can keep advancing the
+    // displayed elapsed time even if a poll fails.
+    tickTimer = setInterval(() => {
+      tickNow = Date.now();
+    }, TICK_INTERVAL);
 
     return () => {
       stopPolling();
+      if (tickTimer !== null) {
+        clearInterval(tickTimer);
+        tickTimer = null;
+      }
     };
   });
 
@@ -110,6 +145,8 @@
       queue = queueData;
       nowPlaying = nowPlayingData;
       deckStatus = deckStatusData;
+      // Re-anchor the elapsed projection to this server value.
+      lastPolledAt = Date.now();
     } catch {
       // Polling failures are non-critical.
     }
@@ -322,7 +359,7 @@
       <NowPlaying
         title={nowPlaying?.title}
         artist={nowPlaying?.artist}
-        elapsed={nowPlaying?.elapsed}
+        elapsed={nowPlaying === null ? undefined : displayedElapsed}
         duration={nowPlaying?.duration}
         {paused}
         onpause={() => void handlePause()}
