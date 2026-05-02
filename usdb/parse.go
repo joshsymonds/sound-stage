@@ -2,6 +2,7 @@ package usdb
 
 import (
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,8 +24,8 @@ var songRowRegex = regexp.MustCompile(
 )
 
 // parseSearchResults extracts songs from USDB search results HTML.
-func parseSearchResults(html string) []Song {
-	matches := songRowRegex.FindAllStringSubmatch(html, -1)
+func parseSearchResults(body string) []Song {
+	matches := songRowRegex.FindAllStringSubmatch(body, -1)
 	if matches == nil {
 		return nil
 	}
@@ -37,9 +38,9 @@ func parseSearchResults(html string) []Song {
 		}
 		songs = append(songs, Song{
 			ID:       id,
-			Artist:   strings.TrimSpace(match[2]),
-			Title:    strings.TrimSpace(match[3]),
-			Language: strings.TrimSpace(match[4]),
+			Artist:   strings.TrimSpace(html.UnescapeString(match[2])),
+			Title:    strings.TrimSpace(html.UnescapeString(match[3])),
+			Language: strings.TrimSpace(html.UnescapeString(match[4])),
 		})
 	}
 	return songs
@@ -104,15 +105,15 @@ var artistTitleRegex = regexp.MustCompile(
 )
 
 // parseDetailPage extracts song metadata and YouTube IDs from a USDB detail page.
-func parseDetailPage(html string, songID int) *SongDetails {
+func parseDetailPage(body string, songID int) *SongDetails {
 	details := &SongDetails{
-		HasCover: strings.Contains(html, fmt.Sprintf("data/cover/%d.jpg", songID)),
+		HasCover: strings.Contains(body, fmt.Sprintf("data/cover/%d.jpg", songID)),
 	}
 
 	// Extract artist and title from the detail table header row.
-	if match := artistTitleRegex.FindStringSubmatch(html); match != nil {
-		details.Artist = strings.TrimSpace(match[1])
-		details.Title = strings.TrimSpace(match[2])
+	if match := artistTitleRegex.FindStringSubmatch(body); match != nil {
+		details.Artist = strings.TrimSpace(html.UnescapeString(match[1]))
+		details.Title = strings.TrimSpace(html.UnescapeString(match[2]))
 	}
 
 	// Multi-stage YouTube extraction from comments, matching usdb_syncer's approach:
@@ -123,7 +124,7 @@ func parseDetailPage(html string, songID int) *SongDetails {
 	seen := make(map[string]bool)
 
 	// Stage 1: <embed> tags.
-	for _, match := range embedSrcRegex.FindAllStringSubmatch(html, -1) {
+	for _, match := range embedSrcRegex.FindAllStringSubmatch(body, -1) {
 		if id := extractYouTubeID(match[1]); id != "" && !seen[id] {
 			details.YouTubeIDs = append(details.YouTubeIDs, id)
 			seen[id] = true
@@ -131,7 +132,7 @@ func parseDetailPage(html string, songID int) *SongDetails {
 	}
 
 	// Stage 2: <iframe> tags.
-	for _, match := range iframeSrcRegex.FindAllStringSubmatch(html, -1) {
+	for _, match := range iframeSrcRegex.FindAllStringSubmatch(body, -1) {
 		if id := extractYouTubeID(match[1]); id != "" && !seen[id] {
 			details.YouTubeIDs = append(details.YouTubeIDs, id)
 			seen[id] = true
@@ -139,7 +140,7 @@ func parseDetailPage(html string, songID int) *SongDetails {
 	}
 
 	// Stage 3: <a href="..."> tags.
-	for _, match := range anchorHrefRegex.FindAllStringSubmatch(html, -1) {
+	for _, match := range anchorHrefRegex.FindAllStringSubmatch(body, -1) {
 		if id := extractYouTubeID(match[1]); id != "" && !seen[id] {
 			details.YouTubeIDs = append(details.YouTubeIDs, id)
 			seen[id] = true
@@ -147,7 +148,7 @@ func parseDetailPage(html string, songID int) *SongDetails {
 	}
 
 	// Stage 4: Plain text URLs.
-	for _, rawURL := range videoURLRegex.FindAllString(html, -1) {
+	for _, rawURL := range videoURLRegex.FindAllString(body, -1) {
 		if id := extractYouTubeID(rawURL); id != "" && !seen[id] {
 			details.YouTubeIDs = append(details.YouTubeIDs, id)
 			seen[id] = true

@@ -292,3 +292,37 @@ func assertHeader(t *testing.T, headers []header, key, want string) {
 		t.Errorf("header %s = %q, want %q", key, got, want)
 	}
 }
+
+// TestParseSearchResults_DecodesHTMLEntities exercises the path live USDB
+// hits regularly: artist or title fields containing &amp;, &#39;, etc.
+// The parser must decode these so the API returns human-readable strings,
+// not literal "&amp;" rendered in the UI.
+func TestParseSearchResults_DecodesHTMLEntities(t *testing.T) {
+	t.Parallel()
+	// Match the row shape of the real USDB fixture: each <td> on its own
+	// line after the artist column, since the regex anchors on \n.
+	html := `<tr class="list_tr1" data-songid="42" data-lastchange="0">` +
+		`<td></td><td></td>` +
+		`<td>Tyler Ward &amp; Lisa Cimorelli</td>` + "\n" +
+		`<td><a href="?detail=42">Don&#39;t Stop &amp; Go</td>` + "\n" +
+		`<td>Pop</td>` + "\n" +
+		`<td>2010</td>` + "\n" +
+		`<td></td>` + "\n" +
+		`<td></td>` + "\n" +
+		`<td>English &amp; French</td>` + "\n"
+
+	songs := parseSearchResults(html)
+	if len(songs) != 1 {
+		t.Fatalf("want 1 song, got %d", len(songs))
+	}
+	got := songs[0]
+	if got.Artist != "Tyler Ward & Lisa Cimorelli" {
+		t.Errorf("Artist = %q, want %q", got.Artist, "Tyler Ward & Lisa Cimorelli")
+	}
+	if got.Title != "Don't Stop & Go" {
+		t.Errorf("Title = %q, want %q", got.Title, "Don't Stop & Go")
+	}
+	if got.Language != "English & French" {
+		t.Errorf("Language = %q, want %q", got.Language, "English & French")
+	}
+}
