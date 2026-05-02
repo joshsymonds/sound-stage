@@ -70,4 +70,18 @@ describe("SongCard", () => {
     });
     expect(screen.getByRole("button")).toBeDisabled();
   });
+
+  it("renders a badge when provided", () => {
+    render(SongCard, {
+      props: { title: "Test", artist: "Test", badge: "instant" },
+    });
+    expect(screen.getByText("instant")).toBeInTheDocument();
+  });
+
+  it("does not render a badge when omitted", () => {
+    const { container } = render(SongCard, {
+      props: { title: "Test", artist: "Test" },
+    });
+    expect(container.querySelector(".badge")).toBeNull();
+  });
 });

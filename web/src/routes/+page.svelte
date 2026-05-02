@@ -20,6 +20,7 @@
   import NowPlaying from "$lib/components/NowPlaying.svelte";
   import QueueItem from "$lib/components/QueueItem.svelte";
   import SongCard from "$lib/components/SongCard.svelte";
+  import { dedupUSDBResults } from "$lib/dedup";
   import { clearGuestName, getGuestName, setGuestName } from "$lib/stores/session";
   import type { NowPlayingState, QueueEntry, Song } from "$lib/types";
   import { onMount } from "svelte";
@@ -55,6 +56,10 @@
     );
   });
   const isSearching = $derived(searchQuery.trim().length >= SEARCH_MIN_CHARS);
+  // USDB results minus anything already in the library (normalized match).
+  // Keeps "Bohemian Rhapsody (Live Aid)" visible alongside a library
+  // "Bohemian Rhapsody" because the titles differ.
+  const dedupedUSDB = $derived(dedupUSDBResults(songs, searchResults));
 
   // Derive ordered (guest, count) pairs from the queue. Insertion-order is
   // preserved by Map, which mirrors the round-robin guestOrder on the server.
@@ -418,45 +423,31 @@
           {/if}
         </div>
 
-        <div class="section-head" style="margin-top: var(--space-md);">
-          <div class="section-label">
-            {isSearching ? "Library matches" : "In your library"}
-          </div>
-          <div class="section-sub">Plays instantly</div>
-        </div>
-        {#if loadingSongs}
-          <div class="empty-prompt"><p>Loading…</p></div>
-        {:else if filteredSongs.length > 0}
-          <div class="list">
-            {#each filteredSongs as song (song.id)}
-              <SongCard
-                title={song.title}
-                artist={song.artist}
-                edition={song.edition}
-                year={song.year}
-                coverUrl={"/api/library/" + song.id + "/cover"}
-                onclick={() => void handleQueueSong(song)}
-              />
-            {/each}
-          </div>
-        {:else if isSearching}
-          <div class="empty-prompt"><p>No library matches for &ldquo;{searchQuery}&rdquo;.</p></div>
-        {:else}
-          <div class="empty-prompt">
-            <p>Nothing downloaded yet. Search above to grab a song.</p>
-          </div>
-        {/if}
-
         {#if isSearching}
-          <div class="section-head" style="margin-top: var(--space-lg);">
-            <div class="section-label">From the USDB catalog</div>
-            <div class="section-sub">Tap to download (~30s) and queue</div>
+          <div class="section-head" style="margin-top: var(--space-md);">
+            <div class="section-label">Results</div>
+            <div class="section-sub">
+              {filteredSongs.length > 0 ? "Library plays instantly · USDB downloads on tap" : "Tap a USDB result to download (~30s) and queue"}
+            </div>
           </div>
-          {#if searching && searchResults.length === 0}
-            <div class="empty-prompt"><p>Searching USDB…</p></div>
-          {:else if searchResults.length > 0}
+          {#if filteredSongs.length === 0 && dedupedUSDB.length === 0 && !searching}
+            <div class="empty-prompt">
+              <p>No matches for &ldquo;{searchQuery}&rdquo;.</p>
+            </div>
+          {:else}
             <div class="list">
-              {#each searchResults as result (result.id)}
+              {#each filteredSongs as song (song.id)}
+                <SongCard
+                  title={song.title}
+                  artist={song.artist}
+                  edition={song.edition}
+                  year={song.year}
+                  coverUrl={"/api/library/" + song.id + "/cover"}
+                  onclick={() => void handleQueueSong(song)}
+                  badge="instant"
+                />
+              {/each}
+              {#each dedupedUSDB as result (result.id)}
                 <SongCard
                   title={result.title}
                   artist={result.artist}
@@ -467,9 +458,35 @@
                   <div class="download-status">Downloading…</div>
                 {/if}
               {/each}
+              {#if searching && dedupedUSDB.length === 0}
+                <div class="empty-prompt"><p>Searching USDB…</p></div>
+              {/if}
+            </div>
+          {/if}
+        {:else}
+          <div class="section-head" style="margin-top: var(--space-md);">
+            <div class="section-label">In your library</div>
+            <div class="section-sub">Plays instantly</div>
+          </div>
+          {#if loadingSongs}
+            <div class="empty-prompt"><p>Loading…</p></div>
+          {:else if filteredSongs.length > 0}
+            <div class="list">
+              {#each filteredSongs as song (song.id)}
+                <SongCard
+                  title={song.title}
+                  artist={song.artist}
+                  edition={song.edition}
+                  year={song.year}
+                  coverUrl={"/api/library/" + song.id + "/cover"}
+                  onclick={() => void handleQueueSong(song)}
+                />
+              {/each}
             </div>
           {:else}
-            <div class="empty-prompt"><p>No USDB matches.</p></div>
+            <div class="empty-prompt">
+              <p>Nothing downloaded yet. Search above to grab a song.</p>
+            </div>
           {/if}
         {/if}
       </div>

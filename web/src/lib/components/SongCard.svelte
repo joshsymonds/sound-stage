@@ -6,6 +6,7 @@
     year,
     coverUrl,
     onclick,
+    badge,
   }: {
     title: string;
     artist: string;
@@ -13,6 +14,7 @@
     year?: number;
     coverUrl?: string;
     onclick?: () => void;
+    badge?: string;
   } = $props();
 
   let interactive = $derived(onclick !== undefined);
@@ -58,6 +60,9 @@
       </span>
     {/if}
   </div>
+  {#if badge}
+    <span class="badge">{badge}</span>
+  {/if}
 </button>
 
 <style>
@@ -142,5 +147,19 @@
   .meta {
     font-size: 0.6875rem;
     color: var(--color-text-muted);
+  }
+
+  .badge {
+    flex-shrink: 0;
+    align-self: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-pink);
+    color: var(--color-pink);
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-shadow: var(--glow-text-pink);
   }
 </style>

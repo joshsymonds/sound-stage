@@ -65,3 +65,32 @@
     <SongCard title="Somebody That I Used to Know" artist="Gotye" year={2011} onclick={() => {}} />
   </div>
 </Story>
+
+<Story name="Unified Browse Results">
+  <div style="width: 350px; display: flex; flex-direction: column; gap: 8px;">
+    <SongCard
+      title="Bohemian Rhapsody"
+      artist="Queen"
+      year={1975}
+      onclick={() => {}}
+      badge="instant"
+    />
+    <SongCard
+      title="Dancing Queen"
+      artist="ABBA"
+      edition="ESC 1974"
+      onclick={() => {}}
+      badge="instant"
+    />
+    <SongCard
+      title="Bohemian Rhapsody (Live Aid)"
+      artist="Queen"
+      onclick={() => {}}
+    />
+    <SongCard
+      title="Don't Stop Me Now"
+      artist="Queen"
+      onclick={() => {}}
+    />
+  </div>
+</Story>
