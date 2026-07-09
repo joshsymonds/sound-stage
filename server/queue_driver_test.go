@@ -3,6 +3,8 @@ package server_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,7 +27,7 @@ func setupDriver(t *testing.T) (*fakeusdx.Fake, *server.Queue, *server.QueueDriv
 	t.Cleanup(srv.Close)
 
 	queue := server.NewQueue()
-	driver := server.NewQueueDriver(srv.URL, queue, tickInterval)
+	driver := server.NewQueueDriver(srv.URL, queue, tickInterval, nil)
 	if driver == nil {
 		t.Fatal("NewQueueDriver returned nil; deck URL was empty?")
 	}
@@ -223,7 +225,7 @@ func TestQueueDriver_SlowDeckDoesNotStallTicker(t *testing.T) {
 	t.Cleanup(slow.Close)
 
 	queue := server.NewQueue()
-	driver := server.NewQueueDriver(slow.URL, queue, 20*time.Millisecond)
+	driver := server.NewQueueDriver(slow.URL, queue, 20*time.Millisecond, nil)
 	if driver == nil {
 		t.Fatal("NewQueueDriver returned nil")
 	}
@@ -311,7 +313,7 @@ func TestQueueDriver_SlotBackPressure(t *testing.T) {
 
 func TestNewQueueDriver_EmptyDeckURLReturnsNil(t *testing.T) {
 	t.Parallel()
-	driver := server.NewQueueDriver("", server.NewQueue(), tickInterval)
+	driver := server.NewQueueDriver("", server.NewQueue(), tickInterval, nil)
 	if driver != nil {
 		t.Errorf("NewQueueDriver(\"\", ...) = %v, want nil", driver)
 	}
@@ -319,7 +321,7 @@ func TestNewQueueDriver_EmptyDeckURLReturnsNil(t *testing.T) {
 
 func TestQueueDriver_StatusBeforeStart(t *testing.T) {
 	t.Parallel()
-	driver := server.NewQueueDriver("http://127.0.0.1:1", server.NewQueue(), tickInterval)
+	driver := server.NewQueueDriver("http://127.0.0.1:1", server.NewQueue(), tickInterval, nil)
 	ok, age := driver.Status()
 	if ok {
 		t.Errorf("ok = true before any probe; want false")
@@ -347,7 +349,7 @@ func TestQueueDriver_StatusReflectsFailedProbe(t *testing.T) {
 	t.Parallel()
 	// Point at an unreachable port so every probe errors. Driver records
 	// the failure on each tick.
-	driver := server.NewQueueDriver("http://127.0.0.1:1", server.NewQueue(), tickInterval)
+	driver := server.NewQueueDriver("http://127.0.0.1:1", server.NewQueue(), tickInterval, nil)
 	t.Cleanup(driver.Stop)
 	driver.Start()
 
@@ -357,5 +359,91 @@ func TestQueueDriver_StatusReflectsFailedProbe(t *testing.T) {
 	}) {
 		ok, age := driver.Status()
 		t.Fatalf("Status never reported a failed probe; got ok=%v age=%v", ok, age)
+	}
+}
+
+// writeLibrarySong creates <libDir>/<artist> - <title>/song.txt and returns
+// the song's stable id.
+func writeLibrarySong(t *testing.T, libDir, artist, title string) string {
+	t.Helper()
+	songDir := filepath.Join(libDir, artist+" - "+title)
+	if err := os.MkdirAll(songDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	txt := "#ARTIST:" + artist + "\n#TITLE:" + title + "\n#MP3:audio.webm\n"
+	if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return stableid.Compute(artist, title, false)
+}
+
+func TestQueueDriver_404SelfHealsViaRefresh(t *testing.T) {
+	t.Parallel()
+	fake := fakeusdx.New()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	// A song that exists in the local library but not in the fake deck's —
+	// the stage 404s, the driver POSTs /refresh, and the retry stages.
+	libDir := t.TempDir()
+	id := writeLibrarySong(t, libDir, "ABBA", "Dancing Queen")
+
+	queue := server.NewQueue()
+	driver := server.NewQueueDriver(srv.URL, queue, tickInterval, &server.DriverLibrary{
+		Cache: server.NewLibraryCache(),
+		Dir:   libDir,
+		// DeckDir empty: in tests the fake reads the same filesystem.
+	})
+	if driver == nil {
+		t.Fatal("NewQueueDriver returned nil")
+	}
+	t.Cleanup(driver.Stop)
+
+	queue.Add(server.Song{ID: id, Title: "Dancing Queen", Artist: "ABBA"}, "Alice")
+	driver.Start()
+
+	if !waitFor(2*time.Second, func() bool { return fake.Slot() != nil }) {
+		t.Fatal("slot never populated; 404 self-heal did not refresh + restage")
+	}
+	if got := fake.Slot().SongID; got != id {
+		t.Errorf("slot.SongID = %q, want %q", got, id)
+	}
+}
+
+func TestQueueDriver_404AfterRefreshDrops(t *testing.T) {
+	t.Parallel()
+	fake := fakeusdx.New()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	libDir := t.TempDir()
+	id := writeLibrarySong(t, libDir, "ABBA", "Waterloo")
+
+	// Force /queue to 404 even after the (successful) /refresh: the driver
+	// must give up after one heal attempt instead of looping refresh+retry.
+	fake.QueueInjection("/queue", http.StatusNotFound, 2)
+
+	queue := server.NewQueue()
+	driver := server.NewQueueDriver(srv.URL, queue, tickInterval, &server.DriverLibrary{
+		Cache: server.NewLibraryCache(),
+		Dir:   libDir,
+	})
+	if driver == nil {
+		t.Fatal("NewQueueDriver returned nil")
+	}
+	t.Cleanup(driver.Stop)
+
+	queue.Add(server.Song{ID: id, Title: "Waterloo", Artist: "ABBA"}, "Alice")
+	driver.Start()
+
+	// Both injected 404s must be consumed (stage → heal → restage → drop).
+	// If the drop failed, the third stage attempt would hit the real fake —
+	// which now knows the song via /refresh — and populate the slot.
+	time.Sleep(10 * tickInterval)
+	if slot := fake.Slot(); slot != nil {
+		t.Errorf("slot = %+v, want nil (entry must drop after post-refresh 404)", slot)
+	}
+	if entries := queue.List(); len(entries) != 0 {
+		t.Errorf("queue = %+v, want empty after drop", entries)
 	}
 }

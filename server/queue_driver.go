@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -39,13 +40,32 @@ type QueueDriver struct {
 	statusMu    sync.RWMutex
 	lastProbeOK bool
 	lastProbeAt time.Time
+	// lib wires the local library into 404 self-healing (handleUnknownSong).
+	// nil disables self-heal: a 404 on stage just drops the entry.
+	lib *DriverLibrary
+	// healed tracks song ids we've already POSTed /refresh for, so an id the
+	// Deck still rejects after its refresh is dropped instead of looping.
+	// Only touched from tick goroutines, which tickSem serializes to one in
+	// flight — no lock needed.
+	healed map[string]bool
+}
+
+// DriverLibrary wires the queue driver to the server's library so a 404 on
+// stage can self-heal via POST /refresh. Cache must be the same LibraryCache
+// the HTTP handlers use. DeckDir is where the Deck mounts the library that
+// this host reads at Dir; empty means the two paths coincide.
+type DriverLibrary struct {
+	Cache   *LibraryCache
+	Dir     string
+	DeckDir string
 }
 
 // NewQueueDriver returns a driver configured to talk to deckURL, or nil if
 // deckURL is empty (the server accepts "no deck" as a valid configuration).
 // Uses a dedicated http.Client with its own connection pool so a busy or
 // misbehaving Deck can't interfere with http.DefaultClient traffic.
-func NewQueueDriver(deckURL string, queue *Queue, interval time.Duration) *QueueDriver {
+// lib enables 404 self-healing via POST /refresh; nil disables it.
+func NewQueueDriver(deckURL string, queue *Queue, interval time.Duration, lib *DriverLibrary) *QueueDriver {
 	if deckURL == "" {
 		return nil
 	}
@@ -56,6 +76,8 @@ func NewQueueDriver(deckURL string, queue *Queue, interval time.Duration) *Queue
 		client:   newDeckClient(),
 		logger:   slog.Default(),
 		tickSem:  make(chan struct{}, 1),
+		lib:      lib,
+		healed:   make(map[string]bool),
 	}
 }
 
@@ -265,6 +287,53 @@ func (d *QueueDriver) Status() (ok bool, age time.Duration) {
 	return d.lastProbeOK, time.Since(d.lastProbeAt)
 }
 
+// handleUnknownSong handles a 404 from POST /queue: the Deck's in-memory
+// library doesn't know a song that ours does. Drift happens when USDX
+// (re)starts and its startup scan misses a song that landed later, or when
+// a /refresh after download never reached it. Self-heal: POST /refresh with
+// the Deck-visible path of the song's .txt, then re-queue the entry so the
+// next tick retries the stage. One refresh per song id — an id the Deck
+// still rejects after its refresh is dropped for real, with a log line.
+func (d *QueueDriver) handleUnknownSong(entry *QueueEntry) {
+	id := entry.Song.ID
+	if d.healed[id] {
+		delete(d.healed, id)
+		d.logger.Warn("deck rejected songId after /refresh; dropping",
+			"song_id", id, "requester", entry.Guest)
+		return
+	}
+	if d.lib == nil {
+		d.logger.Warn("deck rejected unknown songId; dropping",
+			"song_id", id, "requester", entry.Guest)
+		return
+	}
+	// Force a scan if nothing has loaded the cache yet this process.
+	if _, err := d.lib.Cache.Get(d.lib.Dir); err != nil {
+		d.logger.Warn("deck rejected unknown songId; local library scan failed; dropping",
+			"song_id", id, "error", err)
+		return
+	}
+	dir, ok := d.lib.Cache.Path(id)
+	if !ok {
+		d.logger.Warn("deck rejected songId that is not in the local library either; dropping",
+			"song_id", id, "requester", entry.Guest)
+		return
+	}
+	txtPath := filepath.Join(dir, "song.txt")
+	if mapped, mappedOK := deckPath(txtPath, d.lib.Dir, d.lib.DeckDir); mappedOK {
+		txtPath = mapped
+	}
+	if !notifyDeck(context.Background(), d.client, d.deckURL, txtPath, d.logger) {
+		d.logger.Warn("deck /refresh failed during 404 self-heal; dropping",
+			"song_id", id, "path", txtPath)
+		return
+	}
+	d.healed[id] = true
+	d.queue.ReAdd(entry.Song, entry.Guest)
+	d.logger.Info("deck lacked songId; sent /refresh and re-queued",
+		"song_id", id, "path", txtPath)
+}
+
 type queueStagePayload struct {
 	SongID    string `json:"songId"`
 	Requester string `json:"requester"`
@@ -307,17 +376,15 @@ func (d *QueueDriver) stage(entry *QueueEntry) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
+		delete(d.healed, payload.SongID)
 		d.logger.Info("staged song to deck",
 			"song_id", payload.SongID,
 			"requester", payload.Requester,
 		)
 	case http.StatusNotFound:
-		// Library drift: the Deck doesn't know this song. Drop it — retrying
-		// won't help until the library is refreshed on the Deck side.
-		d.logger.Warn("deck rejected unknown songId; dropping",
-			"song_id", payload.SongID,
-			"requester", payload.Requester,
-		)
+		// Library drift: the Deck doesn't know a song this server does.
+		// Try to close the gap with POST /refresh before giving up.
+		d.handleUnknownSong(entry)
 	case http.StatusConflict:
 		// "song in progress" — the Deck is briefly in ScreenSing state.
 		// Next tick should succeed once the song completes.

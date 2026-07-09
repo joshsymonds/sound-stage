@@ -66,7 +66,7 @@ func TestEndToEnd_TwoSongAutoAdvance(t *testing.T) {
 	appSrv := httptest.NewServer(appHandler)
 	defer appSrv.Close()
 
-	driver := server.NewQueueDriver(deckSrv.URL, queue, 20*time.Millisecond)
+	driver := server.NewQueueDriver(deckSrv.URL, queue, 20*time.Millisecond, nil)
 	if driver == nil {
 		t.Fatal("NewQueueDriver returned nil")
 	}

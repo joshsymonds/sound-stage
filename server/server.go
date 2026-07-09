@@ -17,6 +17,10 @@ type Config struct {
 	// expose on all interfaces (rarely correct).
 	BindAddress string
 	LibraryDir  string
+	// Library, when non-nil, is the shared library cache. The serve command
+	// passes one so the queue driver's 404 self-heal and the HTTP handlers
+	// see the same scan state; nil creates a fresh cache internally.
+	Library *LibraryCache
 	// StaticFS holds the SPA assets to serve at /. In production, this is the
 	// embed.FS sub-tree wired in main.go. Tests pass an fstest.MapFS. A nil
 	// StaticFS disables the SPA route entirely (API-only mode).
@@ -45,7 +49,10 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 
 	// Shared library cache: scanned once lazily, invalidated by the download
 	// pipeline when new songs land.
-	libCache := NewLibraryCache()
+	libCache := cfg.Library
+	if libCache == nil {
+		libCache = NewLibraryCache()
+	}
 
 	// One http.Client shared by all user-facing Deck-bound calls (playback
 	// proxies + notifyDeck). Keeps the pool out of http.DefaultClient so
