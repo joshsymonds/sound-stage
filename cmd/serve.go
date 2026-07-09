@@ -30,10 +30,11 @@ func SetStaticFS(f fs.FS) {
 }
 
 var (
-	servePort       string
-	serveBindAddr   string
-	serveDeckURL    string
-	serveDelyricURL string
+	servePort           string
+	serveBindAddr       string
+	serveDeckURL        string
+	serveDeckLibraryDir string
+	serveDelyricURL     string
 )
 
 var serveCmd = &cobra.Command{
@@ -53,6 +54,11 @@ func init() {
 	serveCmd.Flags().StringVar(
 		&serveDeckURL, "deck-url", "",
 		"Steam Deck Pascal API base URL (e.g. http://172.31.0.39:9000)",
+	)
+	serveCmd.Flags().StringVar(
+		&serveDeckLibraryDir, "deck-library-dir", "",
+		"library path as the Deck mounts it (e.g. /var/mnt/music/sound-stage); "+
+			"used to translate /refresh paths — empty sends server-local paths",
 	)
 	serveCmd.Flags().StringVar(
 		&serveDelyricURL, "delyric-url", "",
@@ -81,15 +87,25 @@ func runServe(_ *cobra.Command, _ []string) error {
 	cfg.Searcher = client
 	cfg.CoverFetcher = client
 	cfg.Download = &server.DownloadConfig{
-		Client:    client,
-		YtDlp:     ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight},
-		OutputDir: outputDir,
-		DeckURL:   serveDeckURL,
+		Client:         client,
+		YtDlp:          ytdlp.Downloader{Proxy: proxy, MaxHeight: maxHeight},
+		OutputDir:      outputDir,
+		DeckURL:        serveDeckURL,
+		DeckLibraryDir: serveDeckLibraryDir,
 	}
 
 	queue := server.NewQueue()
 
-	driver := server.NewQueueDriver(cfg.DeckURL, queue, queueDriverInterval)
+	// Shared between the HTTP handlers and the queue driver so 404 self-heal
+	// resolves song paths from the same scan the API serves.
+	libCache := server.NewLibraryCache()
+	cfg.Library = libCache
+
+	driver := server.NewQueueDriver(cfg.DeckURL, queue, queueDriverInterval, &server.DriverLibrary{
+		Cache:   libCache,
+		Dir:     outputDir,
+		DeckDir: serveDeckLibraryDir,
+	})
 	if driver != nil {
 		// Wire the driver as the deck-status reporter BEFORE building the
 		// server, so /api/deck-status reflects probe state.

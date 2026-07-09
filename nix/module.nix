@@ -61,6 +61,19 @@ in {
       description = "USDX Pascal API base URL on the Steam Deck.";
     };
 
+    deckLibraryDir = mkOption {
+      type = types.str;
+      default = "";
+      example = "/var/mnt/music/sound-stage";
+      description = ''
+        Library path as the Steam Deck mounts it. libraryDir and this
+        option name the same NFS export seen from two hosts; when set,
+        paths sent to the Deck's POST /refresh are translated to the
+        Deck's view. Empty sends server-local paths unchanged, which is
+        only correct when both hosts mount the library at the same path.
+      '';
+    };
+
     delyricURL = mkOption {
       type = types.str;
       default = "";
@@ -121,6 +134,7 @@ in {
           + "--port ${cfg.port} "
           + "--bind ${cfg.bindAddress} "
           + "--deck-url ${cfg.deckURL}"
+          + optionalString (cfg.deckLibraryDir != "") " --deck-library-dir ${cfg.deckLibraryDir}"
           + optionalString (cfg.delyricURL != "") " --delyric-url ${cfg.delyricURL}";
 
         User = cfg.user;

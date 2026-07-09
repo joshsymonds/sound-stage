@@ -49,6 +49,11 @@ type DownloadConfig struct {
 	// Empty → skip the notify step (and skip auto-queue, since a song USDX
 	// hasn't been told about would 404 when the queue driver tries to stage).
 	DeckURL string
+	// DeckLibraryDir is where the Deck mounts the library this server reads
+	// at OutputDir (one NFS export, two mount points). When set, /refresh
+	// paths are translated to the Deck's view; empty sends server-local
+	// paths unchanged, which is only correct when the mounts coincide.
+	DeckLibraryDir string
 	// InvalidateLibrary is called after each successful download so a cached
 	// library snapshot (LibraryCache) re-scans on the next GET /api/songs.
 	// Optional — a nil hook is a no-op.
@@ -344,8 +349,14 @@ func finalizeDownload(
 	}
 	// With a configured Deck, /refresh must succeed before queueing — otherwise
 	// USDX doesn't know the song and the queue driver would 404 on stage.
-	if dlConfig.DeckURL != "" && !notifyDeck(ctx, dlConfig.HTTPClient, dlConfig.DeckURL, txtPath, logger) {
-		return nil
+	if dlConfig.DeckURL != "" {
+		refreshPath := txtPath
+		if mapped, ok := deckPath(txtPath, dlConfig.OutputDir, dlConfig.DeckLibraryDir); ok {
+			refreshPath = mapped
+		}
+		if !notifyDeck(ctx, dlConfig.HTTPClient, dlConfig.DeckURL, refreshPath, logger) {
+			return nil
+		}
 	}
 	parsed, parseErr := txtparse.Parse(txtPath)
 	if parseErr != nil {
