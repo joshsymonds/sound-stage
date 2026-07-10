@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -130,6 +131,12 @@ func scanLibrary(dir string) ([]Song, map[string]string, error) {
 		txtPath := filepath.Join(songDir, "song.txt")
 		song, parseErr := parseSongFile(txtPath)
 		if parseErr != nil {
+			if errors.Is(parseErr, errAudioMissing) {
+				// Not junk — a real song entry the Deck will refuse to load
+				// (USDX's AnalyseFile fails without audio). Listing it would
+				// let guests queue a song that can never play.
+				logger.Info("skipping song without playable audio", "path", txtPath)
+			}
 			continue
 		}
 
@@ -149,10 +156,22 @@ func scanLibrary(dir string) ([]Song, map[string]string, error) {
 	return songs, paths, nil
 }
 
+// errAudioMissing marks song directories whose .txt parses but whose audio
+// file is absent (interrupted download). USDX rejects these at scan time, so
+// the library must too — otherwise POST /queue 404s on the Deck forever.
+var errAudioMissing = errors.New("audio file missing")
+
 func parseSongFile(path string) (Song, error) {
 	parsed, err := txtparse.Parse(path)
 	if err != nil {
 		return Song{}, fmt.Errorf("parse: %w", err)
+	}
+
+	if parsed.Audio == "" {
+		return Song{}, fmt.Errorf("%w: no #MP3/#AUDIO tag in %s", errAudioMissing, path)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(path), parsed.Audio)); statErr != nil {
+		return Song{}, fmt.Errorf("%w: %s", errAudioMissing, parsed.Audio)
 	}
 
 	return Song{

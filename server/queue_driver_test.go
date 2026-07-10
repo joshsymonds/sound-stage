@@ -374,6 +374,9 @@ func writeLibrarySong(t *testing.T, libDir, artist, title string) string {
 	if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return stableid.Compute(artist, title, false)
 }
 

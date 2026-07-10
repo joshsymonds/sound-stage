@@ -23,14 +23,18 @@ import (
 
 // Song is the minimal metadata subset this package extracts. It intentionally
 // does not carry computed IDs, filesystem paths, or anything else a caller
-// might layer on top. Edition and Year are optional — Parse returns zero
-// values when the corresponding header is absent.
+// might layer on top. Edition, Year, and Audio are optional — Parse returns
+// zero values when the corresponding header is absent.
 type Song struct {
 	Artist  string
 	Title   string
 	Duet    bool
 	Edition string
 	Year    int
+	// Audio is the #MP3 (or newer #AUDIO) tag value: the audio file's name
+	// relative to the .txt's directory. USDX refuses songs whose audio file
+	// is missing, so callers listing playable songs should verify it exists.
+	Audio string
 }
 
 // Parse reads the .txt file at path and extracts its metadata.
@@ -88,6 +92,8 @@ func applyLine(line string, song *Song) {
 		song.Title = val
 	case "DUETSINGERP1", "DUETSINGERP2":
 		song.Duet = true
+	case "MP3", "AUDIO":
+		song.Audio = val
 	case "EDITION":
 		song.Edition = val
 	case "YEAR":
