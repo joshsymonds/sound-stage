@@ -52,6 +52,13 @@ func PrepareSong(rawTxt string, details *SongDetails, songDir string) (*Prepared
 	headers = setHeader(headers, "VIDEO", videoFile)
 	headers = setHeader(headers, "COVER", "cover.jpg")
 
+	// The txt we write is always valid UTF-8 (decodeUSDB transcodes at the
+	// fetch boundary), so declare it. Leaving a stale #ENCODING:CP1252 from
+	// the upload — or relying on USDX's Auto detection — would make USDX
+	// decode our UTF-8 bytes as CP1252, mangling artist/title and breaking
+	// stable-ID parity with SoundStage.
+	headers = setHeader(headers, "ENCODING", "UTF8")
+
 	// Write the corrected txt
 	txtContent := formatTxt(headers, body)
 	txtPath := filepath.Join(songDir, "song.txt")
