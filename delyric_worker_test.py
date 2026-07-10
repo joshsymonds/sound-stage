@@ -22,10 +22,18 @@ def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    """Yield a TestClient with lifespan events active (worker thread running)."""
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Yield a TestClient with lifespan events active (worker thread running).
+
+    The CUDA startup probe is mocked to succeed by default here — this machine
+    has no GPU, so a real probe would fail startup for every test using this
+    fixture. TestCudaStartupProbe below exercises the real wiring by
+    overriding this mock.
+    """
+    import delyric
     import delyric_worker as dw
 
+    monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
     with TestClient(dw.app) as c:
         yield c
 
@@ -210,6 +218,37 @@ class TestSerialQueue:
             assert final["status"] == "complete", final
 
         assert state["max"] == 1, f"expected strict serial execution, saw max concurrent={state['max']}"
+
+
+class TestCudaStartupProbe:
+    """Lifespan startup must call delyric.verify_cuda() so the service fails
+    fast under systemd rather than silently falling back to CPU."""
+
+    def test_lifespan_calls_verify_cuda(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        calls = []
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: calls.append(True))
+        with TestClient(dw.app):
+            pass
+        assert calls == [True]
+
+    def test_lifespan_fails_fast_when_cuda_unavailable(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        def boom() -> None:
+            raise RuntimeError("CUDA is not available to this venv's PyTorch build")
+
+        monkeypatch.setattr(delyric, "verify_cuda", boom)
+        with pytest.raises(RuntimeError, match="CUDA"):
+            with TestClient(dw.app):
+                pass
 
 
 class TestBindHostPrecheck:

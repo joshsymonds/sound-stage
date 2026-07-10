@@ -1,7 +1,10 @@
 # Pinned: matches the version currently proven to work in devenv.nix with
-# the Mel-Band Roformer + HTDemucs_ft ensemble on the 5070 Ti. Newer releases
-# have shipped breaking ensemble-CLI changes — bump deliberately, not casually.
-audio-separator[gpu]==0.44.1
+# the 3-model karaoke MelBand Roformer ensemble (aufr33/viperx + gabox v2 +
+# becruily, avg_wave) on the 5070 Ti. Newer releases have shipped breaking
+# ensemble-CLI changes — bump deliberately, not casually. Verified in this
+# workspace's venv: the [gpu] extra pulls torch 2.13.0+cu130 (CUDA 13.0),
+# which supports sm_120/Blackwell.
+audio-separator[gpu]==0.44.3
 fastapi==0.135.0
 uvicorn[standard]==0.37.0
 pydantic>=2.10,<3

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Delyric — Vocal separation pipeline for UltraStar karaoke songs.
 
-Uses audio-separator with Mel-Band Roformer + HTDemucs_ft ensemble to produce
-instrumental and vocal tracks from existing audio.webm files.
+Uses audio-separator with a 3-model karaoke MelBand Roformer ensemble
+(aufr33/viperx + gabox v2 + becruily, avg_wave) to remove lead vocals while
+keeping backing vocals, producing instrumental and vocal tracks from
+existing audio.webm files.
 """
 
 import concurrent.futures
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -17,17 +20,43 @@ from pathlib import Path
 import click
 from tqdm import tqdm
 
-# Model constants — update these when better checkpoints are released
+# Model constants — update these when better checkpoints are released.
+#
+# This is audio-separator's built-in `karaoke` ensemble preset (3-model MelBand
+# Roformer, avg_wave — see `audio-separator --list_presets` /
+# ensemble_presets.json), reproduced explicitly to match this file's existing
+# --model_filename/--extra_models/--ensemble_algorithm style rather than the
+# newer --ensemble_preset shortcut.
+#
+# anvuew's karaoke_bs_roformer checkpoint scores higher on the MVSEP lead/back
+# separation leaderboard than aufr33_viperx and was the first choice for the
+# primary slot, but it is NOT in audio-separator's model registry — only
+# anvuew's De-Reverb checkpoints are. audio-separator 0.44.3's CLI has no path
+# to load an unlisted checkpoint even if the file is already sitting in
+# --model_file_dir: Separator.download_model_files() unconditionally looks the
+# requested filename up in its bundled registry before ever touching local
+# disk, and raises `ValueError: Model file <name> not found in supported model
+# files` when it isn't there (confirmed by downloading the real checkpoint
+# from HuggingFace and pointing --model_file_dir at it — same error). Next
+# time a model bump is considered, re-check whether audio-separator has added
+# an anvuew karaoke entry to its registry before assuming this trio is final.
+#
+# No htdemucs model — that task removes backing vocals along with the lead,
+# which defeats the point of a karaoke ensemble.
 PRIMARY_MODEL = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
-ENSEMBLE_MODEL = "htdemucs_ft.yaml"
-ENSEMBLE_ALGORITHM = "max_fft"
+ENSEMBLE_EXTRA_MODELS = [
+    "mel_band_roformer_karaoke_gabox_v2.ckpt",
+    "mel_band_roformer_karaoke_becruily.ckpt",
+]
+ENSEMBLE_ALGORITHM = "avg_wave"
+MDXC_OVERLAP = "16"
 
 DEFAULT_LIBRARY = "/mnt/music/sound-stage"
 OPUS_BITRATE = "128k"
 
 LOG_FILENAME = "delyric-errors.log"
 
-SEPARATOR_TIMEOUT = 600  # 10 minutes per song for GPU separation
+SEPARATOR_TIMEOUT = 1800  # 30 minutes per song — headroom for the 3-model ensemble at mdxc_overlap 16
 FFMPEG_TIMEOUT = 120  # 2 minutes per encode
 
 # Abort after this many consecutive failures — catches environmental breakage
@@ -88,6 +117,48 @@ def resolve_audio_separator() -> str:
 AUDIO_SEPARATOR = None  # Populated at startup by main() before any processing.
 
 
+def verify_cuda() -> None:
+    """Verify the venv's PyTorch can see a CUDA device before processing begins.
+
+    onnxruntime/torch can silently fall back to CPU on a Blackwell GPU when
+    wheels mismatch — the separation still runs, just ~100x slower, with no
+    error. On a queue of any real size that silent fallback burns days before
+    anyone notices. Fail loudly here instead, using the same "probe at
+    startup" shape as resolve_audio_separator above.
+
+    Probes with sys.executable rather than resolving "python3" off PATH:
+    nix/wrapper.sh execs the venv's python directly without ever adding its
+    bin/ to PATH (it only prepends ffmpeg's), so a which()-based probe would
+    find a torch-less system python3 under the systemd deployment and fail
+    startup on a perfectly healthy GPU. sys.executable is always the
+    interpreter actually running this process, which is the venv python in
+    every real path — the wrapper execs it for the worker, and the devenv
+    shell puts venv bin first for the CLI.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import torch; print(torch.cuda.is_available())"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise RuntimeError(f"CUDA probe failed to run: {exc}") from exc
+
+    if result.returncode != 0 or result.stdout.strip() != "True":
+        raise RuntimeError(
+            "CUDA is not available to this venv's PyTorch build "
+            "(torch.cuda.is_available() returned False, or the probe itself "
+            "failed to import torch). Running separation like this would "
+            "silently fall back to CPU and burn days processing the queue. "
+            "Check the GPU driver and that the installed torch wheel "
+            "supports this GPU's compute capability (see requirements.txt), "
+            f"then retry. probe returncode={result.returncode} "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+
 def separate_song(song_dir: Path, tmpdir: Path) -> tuple[Path, Path]:
     """Run ensemble separation on audio.webm, return paths to vocals and instrumental WAVs."""
     audio_path = song_dir / "audio.webm"
@@ -96,11 +167,22 @@ def separate_song(song_dir: Path, tmpdir: Path) -> tuple[Path, Path]:
         AUDIO_SEPARATOR,
         str(audio_path),
         "--model_filename", PRIMARY_MODEL,
-        "--extra_models", ENSEMBLE_MODEL,
+        "--extra_models", *ENSEMBLE_EXTRA_MODELS,
         "--ensemble_algorithm", ENSEMBLE_ALGORITHM,
+        "--mdxc_overlap", MDXC_OVERLAP,
+        "--use_autocast",
         "--output_dir", str(tmpdir),
         "--output_format", "WAV",
     ]
+
+    # DELYRIC_MODEL_DIR overrides audio-separator's own model cache directory.
+    # Under the hardened systemd unit, PrivateTmp wipes the default /tmp cache
+    # on every restart; the unit points this at its persistent StateDirectory
+    # instead. Unset, audio-separator falls back to its own baked-in default —
+    # no need to duplicate that default here.
+    model_dir = os.environ.get("DELYRIC_MODEL_DIR")
+    if model_dir:
+        cmd += ["--model_file_dir", model_dir]
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SEPARATOR_TIMEOUT)
     if result.returncode != 0:
@@ -221,7 +303,7 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, l
     """Separate vocals from instrumentals in UltraStar karaoke songs.
 
     Processes songs in LIBRARY_DIR (default: /mnt/music/sound-stage/) using
-    AI ensemble separation (Mel-Band Roformer + HTDemucs_ft).
+    a 3-model karaoke MelBand Roformer ensemble (avg_wave).
     """
     # Set up error logging
     log_path = library_dir / LOG_FILENAME
@@ -266,10 +348,12 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, l
                 click.echo(f"  {s.name}")
         return
 
-    # Resolve and probe audio-separator BEFORE touching any songs — if the venv
-    # is broken we want to know now, not 1000 failures later.
+    # Resolve and probe audio-separator and CUDA BEFORE touching any songs — if
+    # the venv is broken, or GPU inference would silently fall back to CPU, we
+    # want to know now, not 1000 failures (or days of CPU-speed runs) later.
     global AUDIO_SEPARATOR
     AUDIO_SEPARATOR = resolve_audio_separator()
+    verify_cuda()
 
     click.echo(f"Processing {to_process} songs ({skipped} already done)")
 

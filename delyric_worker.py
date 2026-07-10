@@ -212,6 +212,9 @@ def bind_host_available(host: str) -> bool:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Fail fast under systemd rather than silently falling back to CPU (see
+    # delyric.verify_cuda's docstring for why that's dangerous on a queue).
+    delyric.verify_cuda()
     _start_worker()
     try:
         yield
