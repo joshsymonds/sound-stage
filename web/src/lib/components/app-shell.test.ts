@@ -75,4 +75,54 @@ describe("AppShell", () => {
     });
     expect(screen.getByText("Alice · LEAVE")).toBeInTheDocument();
   });
+
+  describe("Party tab badge", () => {
+    it("renders the queue count on the Party tab", () => {
+      const { container } = render(AppShell, {
+        props: { children: textSnippet("c"), queueBadge: 3 },
+      });
+      const badge = container.querySelector(".nav-badge");
+      expect(badge).not.toBeNull();
+      expect(badge?.textContent).toBe("3");
+    });
+
+    it("hides the badge at zero and when undefined", () => {
+      const { container: zero } = render(AppShell, {
+        props: { children: textSnippet("c"), queueBadge: 0 },
+      });
+      expect(zero.querySelector(".nav-badge")).toBeNull();
+      cleanup();
+
+      const { container: absent } = render(AppShell, {
+        props: { children: textSnippet("c") },
+      });
+      expect(absent.querySelector(".nav-badge")).toBeNull();
+    });
+
+    it("remounts the badge (bump animation) when the count increases", async () => {
+      const { container, rerender } = render(AppShell, {
+        props: { children: textSnippet("c"), queueBadge: 2 },
+      });
+      const before = container.querySelector(".nav-badge");
+      await rerender({ queueBadge: 3 });
+      const after = container.querySelector(".nav-badge");
+      expect(after?.textContent).toBe("3");
+      // {#key} remount replaces the DOM node — that's what replays the CSS bump.
+      expect(after).not.toBe(before);
+    });
+
+    it("does not remount when the count decreases or stays equal", async () => {
+      const { container, rerender } = render(AppShell, {
+        props: { children: textSnippet("c"), queueBadge: 3 },
+      });
+      const before = container.querySelector(".nav-badge");
+      await rerender({ queueBadge: 3 });
+      const afterEqual = container.querySelector(".nav-badge");
+      expect(afterEqual).toBe(before);
+      await rerender({ queueBadge: 2 });
+      const afterDecrease = container.querySelector(".nav-badge");
+      expect(afterDecrease?.textContent).toBe("2");
+      expect(afterDecrease).toBe(before);
+    });
+  });
 });

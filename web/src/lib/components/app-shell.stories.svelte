@@ -89,3 +89,33 @@
     </AppShell>
   </div>
 </Story>
+
+<Story name="Party Badge 3">
+  <div style="width: 390px; height: 844px; overflow: hidden;">
+    <AppShell activeTab="browse" queueBadge={3}>
+      <div style="padding: var(--space-lg); color: var(--color-text-muted);">
+        Three songs queued — pink pill on the Party tab.
+      </div>
+    </AppShell>
+  </div>
+</Story>
+
+<Story name="Party Badge 12">
+  <div style="width: 390px; height: 844px; overflow: hidden;">
+    <AppShell activeTab="browse" queueBadge={12}>
+      <div style="padding: var(--space-lg); color: var(--color-text-muted);">
+        Double-digit queue — the pill stretches.
+      </div>
+    </AppShell>
+  </div>
+</Story>
+
+<Story name="Party Badge Zero Hidden">
+  <div style="width: 390px; height: 844px; overflow: hidden;">
+    <AppShell activeTab="browse" queueBadge={0}>
+      <div style="padding: var(--space-lg); color: var(--color-text-muted);">
+        Empty queue — no badge rendered.
+      </div>
+    </AppShell>
+  </div>
+</Story>

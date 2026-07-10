@@ -43,6 +43,7 @@
   let searching = $state(false);
   let paused = $state(false);
   let errorMessage = $state<string | null>(null);
+  let successMessage = $state<string | null>(null);
   let downloadingIds = $state<Set<number>>(new Set());
   let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
   let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -82,6 +83,11 @@
   function showError(message: string): void {
     errorMessage = message;
     setTimeout(() => { errorMessage = null; }, 4000);
+  }
+
+  function showSuccess(message: string): void {
+    successMessage = message;
+    setTimeout(() => { successMessage = null; }, 2500);
   }
 
   onMount(() => {
@@ -162,11 +168,29 @@
 
   async function handleQueueSong(song: Song): Promise<void> {
     if (!guestName) return;
+    // Optimistic: the entry and the toast appear before the POST resolves,
+    // so a tap feels instant on party wifi. The next poll() replaces the
+    // provisional entry with server truth; a failed POST removes it.
+    // The toast deliberately names no queue position: the server orders
+    // round-robin across guests, so the true slot is unknowable here (a
+    // first-time guest jumps ahead of a queue-hog's backlog).
+    const provisional: QueueEntry = {
+      position: queue.length + 1,
+      song,
+      guest: guestName,
+      isNext: queue.length === 0,
+    };
+    queue = [...queue, provisional];
+    showSuccess(
+      provisional.isNext
+        ? `Added ${song.title} — up next!`
+        : `Added ${song.title} to the queue`,
+    );
     try {
       await addToQueue(song, guestName);
       await poll();
-      activeTab = "queue";
     } catch {
+      queue = queue.filter((entry) => entry !== provisional);
       showError("Failed to queue song");
     }
   }
@@ -221,9 +245,11 @@
     if (!guestName) return;
     if (downloadingIds.has(result.id)) return;
     downloadingIds = new Set([...downloadingIds, result.id]);
+    // No provisional queue entry here — the song can't be queued until the
+    // download lands; the toast acknowledges the tap immediately instead.
+    showSuccess(`Added ${result.title} — downloading first`);
     try {
       await triggerDownload(result.id, guestName);
-      activeTab = "queue";
     } catch (err) {
       if (err instanceof USDBNotReadyError) {
         showError("USDB warming up — try again in a moment");
@@ -249,23 +275,24 @@
       return;
     }
     const songWord = count === 1 ? "song" : "songs";
-    if (!window.confirm(`Remove all ${String(count)} of ${name}'s ${songWord} from the queue?`)) {
+    if (!globalThis.confirm(`Remove all ${String(count)} of ${name}'s ${songWord} from the queue?`)) {
       return;
     }
     try {
       await removeAllByGuest(name);
       await poll();
     } catch {
-      showError("Failed to remove " + name);
+      showError(`Failed to remove ${name}`);
     }
   }
 
   async function leaveParty(songCount: number): Promise<void> {
     if (!guestName) return;
+    const queuedWord = songCount === 1 ? "song" : "songs";
     const message = songCount > 0
-      ? `Leave the party? Your ${String(songCount)} queued ${songCount === 1 ? "song" : "songs"} will be removed.`
+      ? `Leave the party? Your ${String(songCount)} queued ${queuedWord} will be removed.`
       : `Leave the party as ${guestName}?`;
-    if (!window.confirm(message)) return;
+    if (!globalThis.confirm(message)) return;
     try {
       // Always call removeAllByGuest — server is idempotent if zero songs
       // belong to this guest, so callers don't need to branch on count.
@@ -311,6 +338,8 @@
 
 {#if errorMessage}
   <div class="toast">{errorMessage}</div>
+{:else if successMessage}
+  <div class="toast toast-success">{successMessage}</div>
 {/if}
 
 {#snippet deckOfflineBanner()}
@@ -341,6 +370,7 @@
     onnavigate={handleNavigate}
     banner={deckOfflineBanner}
     headerEnd={identityBadge}
+    queueBadge={queue.length}
   >
     {#if activeTab === "playing"}
       <NowPlayingView
@@ -358,6 +388,7 @@
       <PartyView
         {queue}
         {guestName}
+        {nowPlaying}
         onremove={(position) => void handleRemove(position)}
         onremoveperson={(name, count) => void handleRemovePerson(name, count)}
         onbrowse={() => handleNavigate("browse")}
@@ -431,6 +462,11 @@
     font-weight: 500;
     z-index: 100;
     animation: fade-slide-up 200ms ease;
+  }
+
+  .toast-success {
+    background: var(--color-green);
+    color: var(--color-bg);
   }
 
   .deck-offline {

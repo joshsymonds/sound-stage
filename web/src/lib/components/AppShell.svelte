@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { Snippet } from "svelte";
 
   let {
@@ -7,12 +8,14 @@
     banner,
     headerEnd,
     children,
+    queueBadge,
   }: {
     activeTab?: "playing" | "queue" | "browse";
     onnavigate?: (tab: string) => void;
     banner?: Snippet;
     headerEnd?: Snippet;
     children: Snippet;
+    queueBadge?: number;
   } = $props();
 
   const tabs = [
@@ -20,6 +23,21 @@
     { id: "queue", label: "Party" },
     { id: "browse", label: "Browse" },
   ] as const;
+
+  // Remount key for the badge: incremented only when the count INCREASES,
+  // so {#key} replays the bump keyframe on new songs but not on removals.
+  // untrack around the previous-value read keeps the effect from
+  // re-triggering itself (same idiom as PartyView's lastQueue tracking).
+  let bumpKey = $state(0);
+  let lastBadge = $state(0);
+  $effect(() => {
+    const next = queueBadge ?? 0;
+    const previous = untrack(() => lastBadge);
+    if (next > previous) {
+      bumpKey = untrack(() => bumpKey) + 1;
+    }
+    lastBadge = next;
+  });
 </script>
 
 <div class="app-shell">
@@ -49,6 +67,11 @@
         onclick={() => onnavigate?.(tab.id)}
       >
         {tab.label}
+        {#if tab.id === "queue" && queueBadge !== undefined && queueBadge > 0}
+          {#key bumpKey}
+            <span class="nav-badge">{queueBadge}</span>
+          {/key}
+        {/if}
       </button>
     {/each}
   </nav>
@@ -148,5 +171,42 @@
     background: var(--color-pink);
     box-shadow: 0 0 6px rgba(255, 45, 123, 0.5);
     border-radius: var(--radius-full);
+  }
+
+  .nav-badge {
+    position: absolute;
+    top: 6px;
+    right: 18%;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-pink);
+    color: white;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    border-radius: var(--radius-full);
+    box-shadow: var(--glow-pink);
+    animation: badge-bump 300ms ease;
+  }
+
+  @keyframes badge-bump {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(1.35);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav-badge {
+      animation: none;
+    }
   }
 </style>
