@@ -48,6 +48,18 @@
   .track {
     display: inline-flex;
     width: max-content;
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
+
+  .track.scrolling {
+    mask-image: linear-gradient(90deg, black 0%, black calc(100% - 24px), transparent 100%);
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      black 0%,
+      black calc(100% - 24px),
+      transparent 100%
+    );
   }
 
   .segment {
@@ -78,6 +90,11 @@
   @media (prefers-reduced-motion: reduce) {
     .track {
       width: 100%;
+    }
+
+    .track.scrolling {
+      mask-image: none;
+      -webkit-mask-image: none;
     }
 
     .track .segment:nth-child(2) {

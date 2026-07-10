@@ -1,11 +1,19 @@
+import { dominantColor } from "$lib/color";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import NowPlaying from "./NowPlaying.svelte";
 
+vi.mock("$lib/color", () => ({
+  dominantColor: vi.fn().mockResolvedValue(null),
+}));
+
 describe("NowPlaying", () => {
   afterEach(cleanup);
+  afterEach(() => {
+    vi.mocked(dominantColor).mockClear();
+  });
 
   it("renders song title and artist when playing", () => {
     render(NowPlaying, {
@@ -204,5 +212,46 @@ describe("NowPlaying", () => {
     const backdrop = container.querySelector<HTMLImageElement>(".backdrop")!;
     await fireEvent.error(backdrop);
     expect(container.querySelector(".backdrop")).not.toBeInTheDocument();
+  });
+
+  it("sets --hero-glow on the hero root once dominantColor resolves", async () => {
+    vi.mocked(dominantColor).mockResolvedValueOnce("hsl(200 50% 45%)");
+    const { container } = render(NowPlaying, {
+      props: {
+        id: "abc123",
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector<HTMLElement>(".now-playing")!.style.getPropertyValue(
+          "--hero-glow",
+        ),
+      ).toBe("hsl(200 50% 45%)");
+    });
+    expect(dominantColor).toHaveBeenCalledWith("/api/library/abc123/thumb");
+  });
+
+  it("does not set --hero-glow when dominantColor resolves null", async () => {
+    vi.mocked(dominantColor).mockResolvedValueOnce(null);
+    const { container } = render(NowPlaying, {
+      props: {
+        id: "abc123",
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(dominantColor).toHaveBeenCalled();
+    });
+    const hero = container.querySelector<HTMLElement>(".now-playing")!;
+    expect(hero.style.getPropertyValue("--hero-glow")).toBe("");
   });
 });

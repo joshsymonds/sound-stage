@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { dominantColor } from "$lib/color";
   import { untrack } from "svelte";
 
   import EqualizerGlyph from "./EqualizerGlyph.svelte";
@@ -32,12 +33,26 @@
   );
   let backdropFailed = $state(false);
   let lastBackdropId = $state(untrack(() => id));
+  let glowColor = $state<string | null>(null);
 
   $effect(() => {
     if (id !== lastBackdropId) {
       lastBackdropId = id;
       backdropFailed = false;
     }
+  });
+
+  $effect(() => {
+    const heroId = id;
+    if (!isPlaying || !heroId) {
+      glowColor = null;
+      return;
+    }
+    void dominantColor(`/api/library/${heroId}/thumb`).then((color) => {
+      if (heroId === id) {
+        glowColor = color;
+      }
+    });
   });
 
   function formatTime(seconds: number): string {
@@ -47,7 +62,11 @@
   }
 </script>
 
-<div class="now-playing" class:idle={!isPlaying}>
+<div
+  class="now-playing"
+  class:idle={!isPlaying}
+  style={glowColor ? `--hero-glow: ${glowColor}` : undefined}
+>
   {#if isPlaying}
     {#if id && !backdropFailed}
       <img
@@ -139,7 +158,13 @@
     position: absolute;
     inset: 0;
     z-index: 0;
-    background: linear-gradient(to top, rgba(10, 10, 15, 0.85), transparent);
+    background:
+      radial-gradient(
+        ellipse at 50% 20%,
+        color-mix(in srgb, var(--hero-glow, var(--color-pink)) 25%, transparent),
+        transparent 70%
+      ),
+      linear-gradient(to top, rgba(10, 10, 15, 0.85), transparent);
   }
 
   .content {
@@ -169,7 +194,7 @@
     font-size: 0.6875rem;
     font-weight: 600;
     letter-spacing: 0.08em;
-    color: var(--color-pink);
+    color: var(--hero-glow, var(--color-pink));
     text-shadow: var(--glow-text-pink);
   }
 
@@ -228,7 +253,7 @@
 
   .progress-fill {
     height: 100%;
-    background: var(--color-pink);
+    background: var(--hero-glow, var(--color-pink));
     border-radius: var(--radius-full);
     box-shadow: 0 0 6px rgba(255, 45, 123, 0.5);
     transition: width 1s linear;
