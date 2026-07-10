@@ -5,6 +5,9 @@ export interface Song {
   duet?: boolean;
   edition?: string;
   year?: number;
+  genre?: string;
+  language?: string;
+  addedAt?: string;
   coverUrl?: string;
 }
 

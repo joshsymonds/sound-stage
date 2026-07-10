@@ -34,7 +34,9 @@ type Song struct {
 	// Audio is the #MP3 (or newer #AUDIO) tag value: the audio file's name
 	// relative to the .txt's directory. USDX refuses songs whose audio file
 	// is missing, so callers listing playable songs should verify it exists.
-	Audio string
+	Audio    string
+	Genre    string
+	Language string
 }
 
 // Parse reads the .txt file at path and extracts its metadata.
@@ -96,6 +98,10 @@ func applyLine(line string, song *Song) {
 		song.Audio = val
 	case "EDITION":
 		song.Edition = val
+	case "GENRE":
+		song.Genre = val
+	case "LANGUAGE":
+		song.Language = val
 	case "YEAR":
 		if y, err := strconv.Atoi(val); err == nil {
 			song.Year = y

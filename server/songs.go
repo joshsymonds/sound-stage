@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/joshsymonds/sound-stage/server/stableid"
 	"github.com/joshsymonds/sound-stage/server/txtparse"
@@ -19,12 +21,15 @@ import (
 // ID is the 16-hex stableid.Compute(Artist, Title, Duet) hash — matches the
 // identity USDX uses, so POST /queue can resolve it on the Deck side.
 type Song struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Artist  string `json:"artist"`
-	Duet    bool   `json:"duet"`
-	Edition string `json:"edition,omitempty"`
-	Year    int    `json:"year,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Artist   string `json:"artist"`
+	Duet     bool   `json:"duet"`
+	Edition  string `json:"edition,omitempty"`
+	Year     int    `json:"year,omitempty"`
+	Genre    string `json:"genre,omitempty"`
+	Language string `json:"language,omitempty"`
+	AddedAt  string `json:"addedAt,omitempty"`
 }
 
 // LibraryCache holds a scanned []Song in memory plus a stableid → song-dir
@@ -174,12 +179,20 @@ func parseSongFile(path string) (Song, error) {
 		return Song{}, fmt.Errorf("%w: %s", errAudioMissing, parsed.Audio)
 	}
 
+	var addedAt string
+	if info, statErr := os.Stat(path); statErr == nil {
+		addedAt = info.ModTime().UTC().Format(time.RFC3339)
+	}
+
 	return Song{
-		ID:      stableid.Compute(parsed.Artist, parsed.Title, parsed.Duet),
-		Title:   parsed.Title,
-		Artist:  parsed.Artist,
-		Duet:    parsed.Duet,
-		Edition: parsed.Edition,
-		Year:    parsed.Year,
+		ID:       stableid.Compute(parsed.Artist, parsed.Title, parsed.Duet),
+		Title:    parsed.Title,
+		Artist:   parsed.Artist,
+		Duet:     parsed.Duet,
+		Edition:  html.UnescapeString(parsed.Edition),
+		Year:     parsed.Year,
+		Genre:    html.UnescapeString(parsed.Genre),
+		Language: parsed.Language,
+		AddedAt:  addedAt,
 	}, nil
 }

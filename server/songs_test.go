@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/joshsymonds/sound-stage/server"
 	"github.com/joshsymonds/sound-stage/server/stableid"
@@ -91,6 +92,9 @@ func TestSongsHandler(t *testing.T) {
 			}
 			if s.Edition != "Test Edition" {
 				t.Errorf("song %q: expected edition 'Test Edition', got %q", s.Title, s.Edition)
+			}
+			if s.AddedAt == "" {
+				t.Errorf("song %q: expected non-empty AddedAt", s.Title)
 			}
 		}
 		if !found["Bohemian Rhapsody"] || !found["Dancing Queen"] {
@@ -269,6 +273,117 @@ func TestSongsHandler(t *testing.T) {
 		}
 		if len(songs) != 1 || !songs[0].Duet {
 			t.Errorf("expected one duet song, got %+v", songs)
+		}
+	})
+
+	t.Run("genre and language appear when present, omitted when absent", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		songDir := filepath.Join(dir, "Queen - Bohemian Rhapsody")
+		if err := os.MkdirAll(songDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		txt := "#TITLE:Bohemian Rhapsody\n#ARTIST:Queen\n#GENRE:Rock\n#LANGUAGE:English\n" +
+			"#MP3:audio.webm\n: 0 5 10 Hello\nE\n"
+		if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// A song without GENRE/LANGUAGE tags to verify omitempty drops the keys.
+		writeSongTxt(t, dir, "ABBA", "Dancing Queen")
+
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var raw []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+
+		var withGenre, without map[string]any
+		for _, s := range raw {
+			switch s["title"] {
+			case "Bohemian Rhapsody":
+				withGenre = s
+			case "Dancing Queen":
+				without = s
+			}
+		}
+		if withGenre == nil || without == nil {
+			t.Fatalf("missing expected songs: %+v", raw)
+		}
+		if withGenre["genre"] != "Rock" || withGenre["language"] != "English" {
+			t.Errorf("got genre=%v language=%v, want Rock/English", withGenre["genre"], withGenre["language"])
+		}
+		if _, ok := without["genre"]; ok {
+			t.Errorf("expected no genre key for song without GENRE tag, got %v", without["genre"])
+		}
+		if _, ok := without["language"]; ok {
+			t.Errorf("expected no language key for song without LANGUAGE tag, got %v", without["language"])
+		}
+	})
+
+	t.Run("GENRE with HTML entity arrives unescaped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		songDir := filepath.Join(dir, "Artist - Title")
+		if err := os.MkdirAll(songDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		txt := "#TITLE:Title\n#ARTIST:Artist\n#GENRE:R&amp;B\n#MP3:audio.webm\n: 0 5 10 Hi\nE\n"
+		if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 {
+			t.Fatalf("expected 1 song, got %d", len(songs))
+		}
+		if songs[0].Genre != "R&B" {
+			t.Errorf("Genre = %q, want R&B (unescaped)", songs[0].Genre)
+		}
+	})
+
+	t.Run("addedAt reflects the song.txt mtime in RFC3339", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeSongTxt(t, dir, "Queen", "Bohemian Rhapsody")
+
+		txtPath := filepath.Join(dir, "Queen - Bohemian Rhapsody", "song.txt")
+		known := time.Date(2020, 3, 15, 12, 30, 0, 0, time.UTC)
+		if err := os.Chtimes(txtPath, known, known); err != nil {
+			t.Fatal(err)
+		}
+
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 {
+			t.Fatalf("expected 1 song, got %d", len(songs))
+		}
+		if songs[0].AddedAt != known.Format(time.RFC3339) {
+			t.Errorf("AddedAt = %q, want %q", songs[0].AddedAt, known.Format(time.RFC3339))
 		}
 	})
 }

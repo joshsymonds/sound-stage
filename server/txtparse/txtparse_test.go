@@ -99,3 +99,42 @@ func TestParse_NotFound(t *testing.T) {
 		t.Error("Parse: err = nil, want error")
 	}
 }
+
+func TestParse_GenreAndLanguage(t *testing.T) {
+	dir := t.TempDir()
+	content := "#ARTIST:A\n#TITLE:T\n#GENRE:Pop\n#LANGUAGE:English\n#BPM:200\n: 0 4 60 Hi\nE\n"
+	path := writeTestFile(t, dir, content)
+	song, err := txtparse.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if song.Genre != "Pop" || song.Language != "English" {
+		t.Errorf("got Genre=%q Language=%q, want Pop/English", song.Genre, song.Language)
+	}
+}
+
+func TestParse_GenreAndLanguageAbsent(t *testing.T) {
+	dir := t.TempDir()
+	content := "#ARTIST:A\n#TITLE:T\n#BPM:200\n: 0 4 60 Hi\nE\n"
+	path := writeTestFile(t, dir, content)
+	song, err := txtparse.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if song.Genre != "" || song.Language != "" {
+		t.Errorf("got Genre=%q Language=%q, want zero values", song.Genre, song.Language)
+	}
+}
+
+func TestParse_GenreRawNotUnescaped(t *testing.T) {
+	dir := t.TempDir()
+	content := "#ARTIST:A\n#TITLE:T\n#GENRE:R&amp;B\n#BPM:200\n: 0 4 60 Hi\nE\n"
+	path := writeTestFile(t, dir, content)
+	song, err := txtparse.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if song.Genre != "R&amp;B" {
+		t.Errorf("Genre = %q, want raw R&amp;B (parser does not unescape)", song.Genre)
+	}
+}
