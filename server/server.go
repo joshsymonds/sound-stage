@@ -62,6 +62,7 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 	// API routes.
 	mux.Handle("GET /api/songs", SongsHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/library/{id}/cover", LibraryCoverHandler(libCache, cfg.LibraryDir))
+	mux.Handle("GET /api/library/{id}/thumb", LibraryThumbHandler(libCache, cfg.LibraryDir))
 	mux.Handle("GET /api/queue", QueueListHandler(queue))
 	mux.Handle("POST /api/queue", QueueAddHandler(queue))
 	mux.Handle("DELETE /api/queue", QueueRemoveByGuestHandler(queue))

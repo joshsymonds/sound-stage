@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png" // register PNG decoding: covers are usually JPEG but occasionally PNG bytes
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"golang.org/x/image/draw"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -45,6 +50,22 @@ const (
 	// (these are just album art) so 0o755 / 0o644 is fine.
 	coverCacheDirPerm  = 0o755
 	coverCacheFilePerm = 0o644
+
+	// thumbWidth is the target width, in pixels, for library thumbnails.
+	thumbWidth = 320
+
+	// thumbJPEGQuality is the JPEG encode quality used for generated
+	// thumbnails.
+	thumbJPEGQuality = 80
+
+	// thumbsDirName names the on-disk thumbnail cache directory under a
+	// library directory.
+	thumbsDirName = ".thumbs"
+
+	// thumbCacheControl tells the browser to keep thumbnails in its HTTP
+	// cache for a day. Longer than coverCacheControl because thumbnails are
+	// only ever regenerated when .thumbs is cleared out from under them.
+	thumbCacheControl = "public, max-age=86400"
 )
 
 // USDBCoverHandler proxies cover images from USDB through our authenticated
@@ -281,4 +302,121 @@ func LibraryCoverHandler(cache *LibraryCache, libraryDir string) http.Handler {
 		w.Header().Set("Cache-Control", coverCacheControl)
 		http.ServeFile(w, r, path)
 	})
+}
+
+// LibraryThumbHandler serves a 320px-wide JPEG thumbnail derived from a
+// song's cover.jpg, generating it once and caching the result on disk under
+// <libraryDir>/.thumbs/<id>.jpg. Concurrent cold requests for the same id
+// coalesce onto a single resize via singleflight, mirroring the pattern
+// USDBCoverHandler uses for upstream fetches.
+//
+// Staleness tradeoff: LibraryCache.Invalidate does not clear .thumbs, so a
+// re-downloaded cover reusing the same id keeps serving its old thumbnail
+// until the client's Cache-Control TTL expires (or an operator clears
+// .thumbs) — accepted because ids are stable per (artist, title, duet) and
+// covers rarely change after a song has been downloaded.
+func LibraryThumbHandler(cache *LibraryCache, libraryDir string) http.Handler {
+	var inflight singleflight.Group
+	thumbsDir := filepath.Join(libraryDir, thumbsDirName)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			http.Error(w, "id is required", http.StatusBadRequest)
+			return
+		}
+		if _, err := cache.Get(libraryDir); err != nil {
+			http.Error(w, "library scan failed", http.StatusInternalServerError)
+			return
+		}
+		dir, ok := cache.Path(id)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		thumbPath := filepath.Join(thumbsDir, id+".jpg")
+		if serveThumbFromCache(w, r, thumbPath) {
+			return
+		}
+		//nolint:errcheck // value unused; singleflight is purely for coalescing
+		_, _, _ = inflight.Do(id, func() (any, error) {
+			populateThumbCache(thumbsDir, dir, id)
+			return struct{}{}, nil
+		})
+		if serveThumbFromCache(w, r, thumbPath) {
+			return
+		}
+		http.NotFound(w, r)
+	})
+}
+
+// serveThumbFromCache serves thumbPath if present, returning true. Returns
+// false to let the caller fall through to (re)generation.
+func serveThumbFromCache(w http.ResponseWriter, r *http.Request, thumbPath string) bool {
+	//nolint:gosec // caller builds thumbPath only from an id already validated via LibraryCache.Path
+	if _, err := os.Stat(thumbPath); err != nil {
+		return false
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", thumbCacheControl)
+	http.ServeFile(w, r, thumbPath)
+	return true
+}
+
+// populateThumbCache decodes songDir/cover.jpg, resizes it to thumbWidth
+// (never upscaling), and writes the JPEG result to thumbsDir/<id>.jpg via a
+// temp file + rename so readers never observe a partial thumbnail. Any
+// failure — missing cover, corrupt image data, or a write error — leaves no
+// file behind; the caller's fallback re-check simply 404s.
+func populateThumbCache(thumbsDir, songDir, id string) {
+	//nolint:gosec // songDir resolved via LibraryCache.Path, not user input
+	src, err := os.Open(filepath.Join(songDir, "cover.jpg"))
+	if err != nil {
+		return
+	}
+	defer src.Close()
+
+	img, _, err := image.Decode(src)
+	if err != nil {
+		return
+	}
+
+	if mkdirErr := os.MkdirAll(thumbsDir, coverCacheDirPerm); mkdirErr != nil {
+		slog.Default().Warn("thumb cache mkdir", "dir", thumbsDir, "error", mkdirErr)
+		return
+	}
+
+	finalPath := filepath.Join(thumbsDir, id+".jpg")
+	tmpPath := finalPath + ".tmp"
+	tmp, err := os.OpenFile( //nolint:gosec // path under controlled thumbsDir, id validated via LibraryCache.Path
+		tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, coverCacheFilePerm,
+	)
+	if err != nil {
+		return
+	}
+
+	encErr := jpeg.Encode(tmp, resizeThumbnail(img), &jpeg.Options{Quality: thumbJPEGQuality})
+	closeErr := tmp.Close()
+	if encErr != nil || closeErr != nil {
+		//nolint:errcheck,gosec // best-effort cleanup on failed encode; tmpPath built from a validated id
+		_ = os.Remove(tmpPath)
+		return
+	}
+	//nolint:errcheck,gosec // best-effort cache write; tmpPath/finalPath built from a validated id
+	_ = os.Rename(tmpPath, finalPath)
+}
+
+// resizeThumbnail scales img to a width of thumbWidth using Catmull-Rom
+// interpolation, preserving aspect ratio. Images already at or narrower than
+// thumbWidth pass through unchanged — thumbnails never upscale source art.
+func resizeThumbnail(img image.Image) image.Image {
+	bounds := img.Bounds()
+	srcWidth := bounds.Dx()
+	if srcWidth <= thumbWidth {
+		return img
+	}
+	srcHeight := bounds.Dy()
+	dstHeight := int(math.Round(float64(srcHeight) * thumbWidth / float64(srcWidth)))
+	dst := image.NewRGBA(image.Rect(0, 0, thumbWidth, dstHeight))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+	return dst
 }
