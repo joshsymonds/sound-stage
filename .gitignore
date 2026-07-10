@@ -41,3 +41,6 @@ web/screenshots/
 
 # OS
 .DS_Store
+
+# Claude Code worktrees and session state
+.claude/
