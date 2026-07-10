@@ -1,22 +1,29 @@
 <script lang="ts">
   import Button from "$lib/components/Button.svelte";
+  import GuestChip from "$lib/components/GuestChip.svelte";
   import QueueItem from "$lib/components/QueueItem.svelte";
-  import type { QueueEntry } from "$lib/types";
+  import { celebrationFor, waitEstimate } from "$lib/party";
+  import type { NowPlayingState, QueueEntry } from "$lib/types";
+  import { untrack } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
 
   let {
     queue,
     guestName,
+    nowPlaying = null,
     onremove,
     onremoveperson,
     onbrowse,
   }: {
     queue: QueueEntry[];
     guestName: string;
+    nowPlaying?: NowPlayingState | null;
     onremove: (position: number) => void;
     onremoveperson: (name: string, count: number) => void;
     onbrowse: () => void;
   } = $props();
+
+  const CELEBRATION_MS = 4000;
 
   // Derive ordered (guest, count) pairs from the queue. Insertion-order is
   // preserved by Map, which mirrors the round-robin guestOrder on the server.
@@ -26,6 +33,41 @@
       counts.set(entry.guest, (counts.get(entry.guest) ?? 0) + 1);
     }
     return Array.from(counts, ([name, count]) => ({ name, count }));
+  });
+
+  const isMineNext = $derived(queue[0]?.guest === guestName);
+
+  const remaining = $derived(
+    nowPlaying
+      ? Math.max(0, nowPlaying.duration - nowPlaying.elapsed)
+      : undefined,
+  );
+
+  // Tracks the previous queue snapshot so celebrationFor can detect a
+  // guest's song transitioning from "queued" to "now playing" between
+  // renders. Read via untrack so writing it back doesn't re-trigger this
+  // same effect.
+  let lastQueue = $state<QueueEntry[]>([]);
+  let celebrating = $state(false);
+  let celebrationTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  $effect(() => {
+    const currentQueue = queue;
+    const previousQueue = untrack(() => lastQueue);
+    if (
+      celebrationFor(previousQueue, currentQueue, nowPlaying?.id, guestName)
+    ) {
+      celebrating = true;
+      clearTimeout(celebrationTimeout);
+      celebrationTimeout = setTimeout(() => {
+        celebrating = false;
+      }, CELEBRATION_MS);
+    }
+    lastQueue = currentQueue;
+  });
+
+  $effect(() => {
+    return () => clearTimeout(celebrationTimeout);
   });
 </script>
 
@@ -48,6 +90,7 @@
           onclick={() => onremoveperson(person.name, person.count)}
           aria-label="Remove all of {person.name}'s songs"
         >
+          <GuestChip name={person.name} />
           <span class="chip-name">{person.name}</span>
           <span class="chip-count">{person.count}</span>
           <span class="chip-x" aria-hidden="true">&times;</span>
@@ -61,6 +104,9 @@
       <div class="section-label">Up next</div>
       <div class="section-sub">Round-robin order</div>
     </div>
+    {#if isMineNext}
+      <div class="up-next-banner">You're up next, {guestName}! 🎤</div>
+    {/if}
     <div class="list">
       {#each queue as entry (entry.position)}
         <QueueItem
@@ -69,7 +115,10 @@
           artist={entry.song.artist}
           guest={entry.guest}
           isNext={entry.isNext}
-          onremove={entry.guest === guestName ? () => onremove(entry.position) : undefined}
+          waitText={waitEstimate(entry.position, remaining)}
+          onremove={entry.guest === guestName
+            ? () => onremove(entry.position)
+            : undefined}
         />
       {/each}
     </div>
@@ -80,6 +129,12 @@
     </div>
   {/if}
 </div>
+
+{#if celebrating}
+  <div class="celebration">
+    <p>You're on, {guestName}! 🎤</p>
+  </div>
+{/if}
 
 <style>
   .section {
@@ -124,7 +179,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 8px 6px 12px;
+    padding: 6px 8px 6px 8px;
     background: var(--color-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-full);
@@ -132,7 +187,9 @@
     font-family: var(--font-body);
     font-size: 0.8125rem;
     cursor: pointer;
-    transition: color var(--transition-normal), border-color var(--transition-normal),
+    transition:
+      color var(--transition-normal),
+      border-color var(--transition-normal),
       box-shadow var(--transition-normal);
   }
 
@@ -174,6 +231,19 @@
     color: var(--color-pink);
   }
 
+  .up-next-banner {
+    margin-bottom: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--color-surface);
+    border: 1px solid var(--color-pink);
+    border-radius: var(--radius-md);
+    box-shadow: var(--glow-pink);
+    color: var(--color-pink);
+    font-weight: 600;
+    font-size: 0.875rem;
+    text-align: center;
+  }
+
   .list {
     display: flex;
     flex-direction: column;
@@ -192,5 +262,40 @@
   .empty-prompt p {
     color: var(--color-text-muted);
     font-size: 0.875rem;
+  }
+
+  .celebration {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 10, 15, 0.92);
+    z-index: 50;
+    animation: celebration-pop 0.4s ease-out;
+  }
+
+  .celebration p {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-pink);
+    text-shadow: var(--glow-text-pink);
+  }
+
+  @keyframes celebration-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.85);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .celebration {
+      animation: none;
+    }
   }
 </style>

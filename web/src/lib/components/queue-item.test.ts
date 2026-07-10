@@ -8,7 +8,12 @@ describe("QueueItem", () => {
 
   it("renders position, title, artist, and guest", () => {
     render(QueueItem, {
-      props: { position: 1, title: "Dancing Queen", artist: "ABBA", guest: "Alice" },
+      props: {
+        position: 1,
+        title: "Dancing Queen",
+        artist: "ABBA",
+        guest: "Alice",
+      },
     });
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("Dancing Queen")).toBeInTheDocument();
@@ -18,7 +23,13 @@ describe("QueueItem", () => {
 
   it("applies next styling when isNext is true", () => {
     const { container } = render(QueueItem, {
-      props: { position: 1, title: "Test", artist: "Test", guest: "Bob", isNext: true },
+      props: {
+        position: 1,
+        title: "Test",
+        artist: "Test",
+        guest: "Bob",
+        isNext: true,
+      },
     });
     const item = container.querySelector(".queue-item");
     expect(item?.classList.contains("next")).toBe(true);
@@ -72,5 +83,40 @@ describe("QueueItem", () => {
     });
     await fireEvent.click(screen.getByLabelText("Remove your song"));
     expect(onremove).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a guest chip alongside the guest name", () => {
+    const { container } = render(QueueItem, {
+      props: { position: 2, title: "Test", artist: "Test", guest: "Alice" },
+    });
+    expect(container.querySelector(".guest-chip")).not.toBeNull();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+  });
+
+  it("does not render a guest chip when guest is omitted", () => {
+    const { container } = render(QueueItem, {
+      props: { position: 2, title: "Test", artist: "Test" },
+    });
+    expect(container.querySelector(".guest-chip")).toBeNull();
+  });
+
+  it("renders waitText when provided", () => {
+    render(QueueItem, {
+      props: {
+        position: 2,
+        title: "Test",
+        artist: "Test",
+        guest: "Alice",
+        waitText: "~4 min",
+      },
+    });
+    expect(screen.getByText("~4 min")).toBeInTheDocument();
+  });
+
+  it("does not render wait text when omitted", () => {
+    const { container } = render(QueueItem, {
+      props: { position: 2, title: "Test", artist: "Test", guest: "Alice" },
+    });
+    expect(container.querySelector(".wait")).toBeNull();
   });
 });

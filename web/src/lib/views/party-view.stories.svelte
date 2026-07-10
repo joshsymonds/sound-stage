@@ -16,11 +16,83 @@
   <div style="width: 390px;">
     <PartyView
       queue={[
-        { position: 1, song: { id: "1", title: "Dancing Queen", artist: "ABBA" }, guest: "Alice", isNext: true },
-        { position: 2, song: { id: "2", title: "Don't Stop Me Now", artist: "Queen" }, guest: "Bob", isNext: false },
-        { position: 3, song: { id: "3", title: "Take On Me", artist: "a-ha" }, guest: "Alice", isNext: false },
+        {
+          position: 1,
+          song: { id: "1", title: "Dancing Queen", artist: "ABBA" },
+          guest: "Alice",
+          isNext: true,
+        },
+        {
+          position: 2,
+          song: { id: "2", title: "Don't Stop Me Now", artist: "Queen" },
+          guest: "Bob",
+          isNext: false,
+        },
+        {
+          position: 3,
+          song: { id: "3", title: "Take On Me", artist: "a-ha" },
+          guest: "Alice",
+          isNext: false,
+        },
       ]}
       guestName="Bob"
+      onremove={() => {}}
+      onremoveperson={() => {}}
+      onbrowse={() => {}}
+    />
+  </div>
+</Story>
+
+<Story name="You're Up Next">
+  <div style="width: 390px;">
+    <PartyView
+      queue={[
+        {
+          position: 1,
+          song: { id: "1", title: "Dancing Queen", artist: "ABBA" },
+          guest: "Alice",
+          isNext: true,
+        },
+        {
+          position: 2,
+          song: { id: "2", title: "Don't Stop Me Now", artist: "Queen" },
+          guest: "Bob",
+          isNext: false,
+        },
+      ]}
+      guestName="Alice"
+      onremove={() => {}}
+      onremoveperson={() => {}}
+      onbrowse={() => {}}
+    />
+  </div>
+</Story>
+
+<Story name="With Now Playing">
+  <div style="width: 390px;">
+    <PartyView
+      queue={[
+        {
+          position: 1,
+          song: { id: "1", title: "Dancing Queen", artist: "ABBA" },
+          guest: "Alice",
+          isNext: true,
+        },
+        {
+          position: 2,
+          song: { id: "2", title: "Don't Stop Me Now", artist: "Queen" },
+          guest: "Bob",
+          isNext: false,
+        },
+      ]}
+      guestName="Bob"
+      nowPlaying={{
+        id: "0",
+        title: "Take On Me",
+        artist: "a-ha",
+        elapsed: 90,
+        duration: 210,
+      }}
       onremove={() => {}}
       onremoveperson={() => {}}
       onbrowse={() => {}}
