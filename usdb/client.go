@@ -236,7 +236,7 @@ func (c *Client) Search(ctx context.Context, params SearchParams) ([]Song, error
 		return nil, fmt.Errorf("reading search response: %w", err)
 	}
 
-	return parseSearchResults(string(body)), nil
+	return parseSearchResults(decodeUSDB(body)), nil
 }
 
 // maxTxtRetries is the maximum number of times to retry a rate-limited gettxt request.
@@ -280,7 +280,7 @@ func (c *Client) getSongTxt(ctx context.Context, songID int, sleepFn func(time.D
 			return "", fmt.Errorf("reading txt response: %w", err)
 		}
 
-		txt, err := extractTextarea(string(body))
+		txt, err := extractTextarea(decodeUSDB(body))
 		if err == nil {
 			return txt, nil
 		}
@@ -327,7 +327,7 @@ func (c *Client) GetSongDetails(ctx context.Context, songID int) (*SongDetails, 
 		return nil, fmt.Errorf("reading detail response: %w", err)
 	}
 
-	return parseDetailPage(string(body), songID), nil
+	return parseDetailPage(decodeUSDB(body), songID), nil
 }
 
 // FetchCover returns the cover image as a stream plus its Content-Type.

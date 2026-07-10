@@ -283,6 +283,28 @@ func TestPrepareSong(t *testing.T) {
 	assertHeader(t, headers, "MP3", "audio.webm")
 	assertHeader(t, headers, "VIDEO", "video.webm")
 	assertHeader(t, headers, "COVER", "cover.jpg")
+	// PrepareSong always writes UTF-8 and must say so — a stale CP1252
+	// declaration would make USDX mis-decode the file.
+	assertHeader(t, headers, "ENCODING", "UTF8")
+}
+
+func TestPrepareSong_OverwritesStaleEncodingHeader(t *testing.T) {
+	t.Parallel()
+	rawTxt := "#TITLE:Test\n#ARTIST:Artist\n#ENCODING:CP1252\n#BPM:120\n: 0 5 10 Hello\nE"
+	details := &SongDetails{Artist: "Artist", Title: "Test"}
+
+	dir := t.TempDir()
+	song, err := PrepareSong(rawTxt, details, filepath.Join(dir, "Artist - Test"))
+	if err != nil {
+		t.Fatalf("PrepareSong: %v", err)
+	}
+
+	data, err := os.ReadFile(song.TxtPath)
+	if err != nil {
+		t.Fatalf("reading song.txt: %v", err)
+	}
+	headers, _ := parseTxt(string(data))
+	assertHeader(t, headers, "ENCODING", "UTF8")
 }
 
 func TestPrepareSong_NoYouTube(t *testing.T) {
