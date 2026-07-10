@@ -49,6 +49,32 @@ func listDir(t *testing.T, dir string) []string {
 	return names
 }
 
+func TestFixEntitiesSkipsNewlineProducingEntities(t *testing.T) {
+	// &#10; decodes to a raw newline; rewriting it would split one header
+	// into two lines and let USDB-sourced content fabricate headers
+	// (e.g. #VIDEO). Such values must be left byte-identical.
+	dir := t.TempDir()
+	txt := "#ARTIST:A\n#TITLE:T\n#EDITION:Foo&#10;#VIDEO:evil.mp4\n#MP3:audio.webm\n: 0 5 10 Hi\nE\n"
+	txtPath := writeSong(t, dir, "A - T", txt)
+
+	var out strings.Builder
+	result, err := fixEntities(t.Context(), fixEntitiesConfig{
+		libraryDir: dir,
+		apply:      true,
+		out:        &out,
+	})
+	if err != nil {
+		t.Fatalf("fixEntities: %v", err)
+	}
+	if result.filesRewritten != 0 {
+		t.Errorf("filesRewritten = %d, want 0 (newline-producing entity must be skipped)", result.filesRewritten)
+	}
+	got := readFileString(t, txtPath)
+	if got != txt {
+		t.Errorf("song.txt modified:\n%q\nwant unchanged:\n%q", got, txt)
+	}
+}
+
 func TestFixEntitiesTagValues(t *testing.T) {
 	t.Parallel()
 	libDir := t.TempDir()

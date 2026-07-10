@@ -182,6 +182,13 @@ func fixHeaderLine(line string) (string, bool) {
 	if fixedValue == value {
 		return line, false
 	}
+	// Numeric/named refs like &#10; or &NewLine; decode to raw control
+	// chars; writing them would split one header into two lines and let
+	// USDB-sourced content fabricate headers (e.g. #VIDEO). A header fix
+	// must never change the line count — leave such values untouched.
+	if strings.ContainsAny(fixedValue, "\n\r") {
+		return line, false
+	}
 	fixed := line[:colon+1] + fixedValue
 	if strings.HasSuffix(line, "\r") {
 		fixed += "\r"

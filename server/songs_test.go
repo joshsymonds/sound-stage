@@ -327,6 +327,38 @@ func TestSongsHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("LANGUAGE with HTML entity arrives unescaped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		songDir := filepath.Join(dir, "Artist - Cancion")
+		if err := os.MkdirAll(songDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		txt := "#TITLE:Cancion\n#ARTIST:Artist\n#LANGUAGE:Espa&ntilde;ol\n#MP3:audio.webm\n: 0 5 10 Hola\nE\n"
+		if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 {
+			t.Fatalf("expected 1 song, got %d", len(songs))
+		}
+		if songs[0].Language != "Español" {
+			t.Errorf("Language = %q, want Español (unescaped)", songs[0].Language)
+		}
+	})
+
 	t.Run("GENRE with HTML entity arrives unescaped", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

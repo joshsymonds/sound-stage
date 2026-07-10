@@ -66,11 +66,13 @@
   const rockSongs = $derived(genreShelf(songs, "rock"));
   const soundtrackSongs = $derived(genreShelf(songs, "soundtrack"));
 
+  // Hoisted: constructing collation options inside a comparator over the
+  // full library (~2.6k songs) visibly stutters phone hardware at Browse-open.
+  const crateCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+
   const sortedSongs = $derived(
     [...songs].sort(
-      (a, b) =>
-        a.artist.localeCompare(b.artist, undefined, { sensitivity: "base" }) ||
-        a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+      (a, b) => crateCollator.compare(a.artist, b.artist) || crateCollator.compare(a.title, b.title),
     ),
   );
 

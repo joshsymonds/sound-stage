@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
 	"golang.org/x/image/draw"
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -317,6 +319,11 @@ func LibraryCoverHandler(cache *LibraryCache, libraryDir string) http.Handler {
 // covers rarely change after a song has been downloaded.
 func LibraryThumbHandler(cache *LibraryCache, libraryDir string) http.Handler {
 	var inflight singleflight.Group
+	// Singleflight only coalesces same-id requests; distinct ids would
+	// otherwise decode+resize concurrently without bound, and several phones
+	// hitting a cold .thumbs at party start can stack 100+ full-JPEG decodes.
+	// The semaphore queues cold generations at CPU width instead.
+	resizeSlots := semaphore.NewWeighted(int64(runtime.NumCPU()))
 	thumbsDir := filepath.Join(libraryDir, thumbsDirName)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -337,8 +344,13 @@ func LibraryThumbHandler(cache *LibraryCache, libraryDir string) http.Handler {
 		if serveThumbFromCache(w, r, thumbPath) {
 			return
 		}
+		reqCtx := r.Context()
 		//nolint:errcheck // value unused; singleflight is purely for coalescing
 		_, _, _ = inflight.Do(id, func() (any, error) {
+			if err := resizeSlots.Acquire(reqCtx, 1); err != nil {
+				return struct{}{}, nil // client gone before a slot freed; skip the work
+			}
+			defer resizeSlots.Release(1)
 			populateThumbCache(thumbsDir, dir, id)
 			return struct{}{}, nil
 		})

@@ -192,7 +192,7 @@ func parseSongFile(path string) (Song, error) {
 		Edition:  html.UnescapeString(parsed.Edition),
 		Year:     parsed.Year,
 		Genre:    html.UnescapeString(parsed.Genre),
-		Language: parsed.Language,
+		Language: html.UnescapeString(parsed.Language),
 		AddedAt:  addedAt,
 	}, nil
 }
