@@ -25,7 +25,7 @@ buildGoModule {
     ];
   };
 
-  vendorHash = "sha256-69nbpyQjGaQhEefFtGW60tygvsAwOmpjhYfyi0Edy/8=";
+  vendorHash = "sha256-q+JETSL5mAIDZBrYB8NEN1evqKi0VkfzZg0uWs2d0ec=";
 
   # Stage the SPA into web/build/ so //go:embed picks up real assets.
   preBuild = ''
