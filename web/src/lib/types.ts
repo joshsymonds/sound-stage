@@ -26,4 +26,5 @@ export interface NowPlayingState {
   artist: string;
   elapsed: number;
   duration: number;
+  singer?: string;
 }

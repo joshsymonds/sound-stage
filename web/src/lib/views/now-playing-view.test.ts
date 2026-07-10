@@ -33,6 +33,33 @@ describe("NowPlayingView", () => {
     expect(screen.getByText("Dancing Queen")).toBeInTheDocument();
   });
 
+  it("passes the song id and singer through to the hero backdrop and singer line", () => {
+    const { container } = render(NowPlayingView, {
+      props: {
+        nowPlaying: {
+          id: "42",
+          title: "Bohemian Rhapsody",
+          artist: "Queen",
+          elapsed: 60,
+          duration: 240,
+          singer: "Alice",
+        },
+        displayedElapsed: 60,
+        paused: false,
+        queue: [],
+        guestName: "Bob",
+        onpause: vi.fn(),
+        onresume: vi.fn(),
+        onremove: vi.fn(),
+        onbrowse: vi.fn(),
+      },
+    });
+
+    const backdrop = container.querySelector<HTMLImageElement>(".backdrop");
+    expect(backdrop?.src).toContain("/api/library/42/cover");
+    expect(container.querySelector(".singer")).toHaveTextContent("Alice");
+  });
+
   it("fires onbrowse when Browse Songs is clicked in the empty state", async () => {
     const user = userEvent.setup();
     const handleBrowse = vi.fn();

@@ -28,8 +28,10 @@
 </script>
 
 <NowPlaying
+  id={nowPlaying?.id}
   title={nowPlaying?.title}
   artist={nowPlaying?.artist}
+  singer={nowPlaying?.singer}
   elapsed={nowPlaying === null ? undefined : displayedElapsed}
   duration={nowPlaying?.duration}
   {paused}

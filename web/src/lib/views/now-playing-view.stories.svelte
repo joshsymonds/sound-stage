@@ -15,7 +15,7 @@
 <Story name="Playing With Up Next">
   <div style="width: 390px;">
     <NowPlayingView
-      nowPlaying={{ id: "1", title: "Bohemian Rhapsody", artist: "Queen", elapsed: 154, duration: 245 }}
+      nowPlaying={{ id: "1", title: "Bohemian Rhapsody", artist: "Queen", elapsed: 154, duration: 245, singer: "Alice" }}
       displayedElapsed={154}
       paused={false}
       queue={[

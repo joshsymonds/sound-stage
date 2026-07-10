@@ -1,5 +1,11 @@
 <script lang="ts">
+  import { untrack } from "svelte";
+
+  import EqualizerGlyph from "./EqualizerGlyph.svelte";
+  import Marquee from "./Marquee.svelte";
+
   let {
+    id,
     title,
     artist,
     singer,
@@ -9,6 +15,7 @@
     onpause,
     onresume,
   }: {
+    id?: string;
     title?: string;
     artist?: string;
     singer?: string;
@@ -23,6 +30,15 @@
   let progress = $derived(
     isPlaying && duration && elapsed !== undefined ? (elapsed / duration) * 100 : 0,
   );
+  let backdropFailed = $state(false);
+  let lastBackdropId = $state(untrack(() => id));
+
+  $effect(() => {
+    if (id !== lastBackdropId) {
+      lastBackdropId = id;
+      backdropFailed = false;
+    }
+  });
 
   function formatTime(seconds: number): string {
     const m = Math.floor(seconds / 60);
@@ -33,30 +49,55 @@
 
 <div class="now-playing" class:idle={!isPlaying}>
   {#if isPlaying}
-    <div class="header-row">
-      <div class="label">{paused ? "PAUSED" : "NOW PLAYING"}</div>
-      {#if onpause || onresume}
-        <button
-          class="playback-toggle"
-          type="button"
-          onclick={() => paused ? onresume?.() : onpause?.()}
-        >
-          {paused ? "Resume" : "Pause"}
-        </button>
-      {/if}
-    </div>
-    {#if singer}
-      <div class="singer">{singer}</div>
+    {#if id && !backdropFailed}
+      <img
+        class="backdrop"
+        aria-hidden="true"
+        alt=""
+        src={`/api/library/${id}/cover`}
+        onerror={() => {
+          backdropFailed = true;
+        }}
+      />
+      <div class="scrim"></div>
     {/if}
-    <div class="title">{title}</div>
-    <div class="artist">{artist}</div>
-    <div class="progress">
-      <div class="progress-bar">
-        <div class="progress-fill" style="width: {progress}%;"></div>
+    <div class="content">
+      <div class="header-row">
+        <div class="eyebrow">
+          <EqualizerGlyph playing={!paused} />
+          <span class="label">{paused ? "PAUSED" : "NOW PLAYING"}</span>
+        </div>
+        {#if onpause || onresume}
+          <button
+            class="playback-toggle"
+            type="button"
+            onclick={() => (paused ? onresume?.() : onpause?.())}
+          >
+            {paused ? "Resume" : "Pause"}
+          </button>
+        {/if}
       </div>
-      <div class="progress-times">
-        <span>{formatTime(elapsed ?? 0)}</span>
-        <span>{formatTime(duration ?? 0)}</span>
+      <div class="title">
+        {#key title}
+          <Marquee>{title}</Marquee>
+        {/key}
+      </div>
+      <div class="artist">
+        {#key artist}
+          <Marquee>{artist}</Marquee>
+        {/key}
+      </div>
+      {#if singer}
+        <div class="singer">🎤 {singer}</div>
+      {/if}
+      <div class="progress">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {progress}%;"></div>
+        </div>
+        <div class="progress-times">
+          <span>{formatTime(elapsed ?? 0)}</span>
+          <span>{formatTime(duration ?? 0)}</span>
+        </div>
       </div>
     </div>
   {:else}
@@ -69,16 +110,46 @@
 
 <style>
   .now-playing {
-    padding: var(--space-lg);
+    position: relative;
+    overflow: hidden;
+    min-height: 340px;
+    display: flex;
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .now-playing.idle {
-    display: flex;
     align-items: center;
     justify-content: center;
     min-height: 160px;
+  }
+
+  .backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(24px) saturate(1.4) brightness(0.55);
+    transform: scale(1.2);
+  }
+
+  .scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(to top, rgba(10, 10, 15, 0.85), transparent);
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: var(--space-lg);
   }
 
   .header-row {
@@ -86,6 +157,12 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: var(--space-sm);
+  }
+
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
   }
 
   .label {
@@ -114,24 +191,24 @@
     border-color: var(--color-pink);
   }
 
-  .singer {
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: var(--color-cyan);
-    margin-bottom: var(--space-xs);
-  }
-
   .title {
-    font-size: 1.5rem;
-    font-weight: 700;
+    font-size: 2.5rem;
+    font-weight: 800;
     color: var(--color-text);
-    line-height: 1.2;
+    line-height: 1.15;
     margin-bottom: 2px;
   }
 
   .artist {
-    font-size: 1rem;
+    font-size: 1.5rem;
     color: var(--color-text-dim);
+    margin-bottom: var(--space-sm);
+  }
+
+  .singer {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--color-pink);
     margin-bottom: var(--space-md);
   }
 
@@ -144,7 +221,7 @@
   .progress-bar {
     width: 100%;
     height: 3px;
-    background: var(--color-surface-raised);
+    background: rgba(255, 255, 255, 0.15);
     border-radius: var(--radius-full);
     overflow: hidden;
   }
@@ -161,7 +238,8 @@
     display: flex;
     justify-content: space-between;
     font-size: 0.75rem;
-    color: var(--color-text-muted);
+    color: var(--color-text-dim);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
   }
 
   .idle-content {

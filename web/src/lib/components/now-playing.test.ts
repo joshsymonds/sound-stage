@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -65,7 +65,7 @@ describe("NowPlaying", () => {
   });
 
   it("shows singer name when provided", () => {
-    render(NowPlaying, {
+    const { container } = render(NowPlaying, {
       props: {
         title: "Test",
         artist: "Test",
@@ -74,7 +74,19 @@ describe("NowPlaying", () => {
         singer: "Alice",
       },
     });
-    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(container.querySelector(".singer")).toHaveTextContent("Alice");
+  });
+
+  it("does not render a singer line when singer is not provided", () => {
+    const { container } = render(NowPlaying, {
+      props: {
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+      },
+    });
+    expect(container.querySelector(".singer")).not.toBeInTheDocument();
   });
 
   it("shows Pause button when playing and handlers provided", () => {
@@ -122,5 +134,75 @@ describe("NowPlaying", () => {
     });
     await user.click(screen.getByRole("button", { name: "Pause" }));
     expect(handlePause).toHaveBeenCalledOnce();
+  });
+
+  it("animates the equalizer glyph while playing and not paused", () => {
+    const { container } = render(NowPlaying, {
+      props: {
+        id: "abc123",
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+        paused: false,
+      },
+    });
+    expect(container.querySelector(".equalizer")).toHaveClass("playing");
+  });
+
+  it("stops the equalizer glyph animation while paused", () => {
+    const { container } = render(NowPlaying, {
+      props: {
+        id: "abc123",
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+        paused: true,
+      },
+    });
+    expect(container.querySelector(".equalizer")).not.toHaveClass("playing");
+  });
+
+  it("renders a blurred cover backdrop derived from the song id", () => {
+    const { container } = render(NowPlaying, {
+      props: {
+        id: "abc123",
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+      },
+    });
+    const backdrop = container.querySelector<HTMLImageElement>(".backdrop");
+    expect(backdrop).toBeInTheDocument();
+    expect(backdrop?.src).toContain("/api/library/abc123/cover");
+  });
+
+  it("does not render a backdrop when no id is given", () => {
+    const { container } = render(NowPlaying, {
+      props: {
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+      },
+    });
+    expect(container.querySelector(".backdrop")).not.toBeInTheDocument();
+  });
+
+  it("hides the backdrop after the cover image fails to load", async () => {
+    const { container } = render(NowPlaying, {
+      props: {
+        id: "abc123",
+        title: "Test",
+        artist: "Test",
+        elapsed: 0,
+        duration: 200,
+      },
+    });
+    const backdrop = container.querySelector<HTMLImageElement>(".backdrop")!;
+    await fireEvent.error(backdrop);
+    expect(container.querySelector(".backdrop")).not.toBeInTheDocument();
   });
 });

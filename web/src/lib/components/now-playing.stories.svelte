@@ -15,6 +15,7 @@
 <Story name="Playing">
   <div style="width: 390px;">
     <NowPlaying
+      id="1"
       title="Bohemian Rhapsody"
       artist="Queen"
       singer="Alice"
@@ -27,6 +28,7 @@
 <Story name="Playing No Singer">
   <div style="width: 390px;">
     <NowPlaying
+      id="2"
       title="Dancing Queen"
       artist="ABBA"
       elapsed={42}
@@ -38,6 +40,7 @@
 <Story name="Long Title">
   <div style="width: 390px;">
     <NowPlaying
+      id="3"
       title="Everybody Wants to Rule the World"
       artist="Tears for Fears"
       singer="Bob"
@@ -50,11 +53,38 @@
 <Story name="Near End">
   <div style="width: 390px;">
     <NowPlaying
+      id="4"
       title="Take On Me"
       artist="a-ha"
       singer="Charlie"
       elapsed={220}
       duration={228}
+    />
+  </div>
+</Story>
+
+<Story name="Paused">
+  <div style="width: 390px;">
+    <NowPlaying
+      id="5"
+      title="Take On Me"
+      artist="a-ha"
+      singer="Charlie"
+      elapsed={120}
+      duration={228}
+      paused={true}
+    />
+  </div>
+</Story>
+
+<Story name="No Cover Available">
+  <div style="width: 390px;">
+    <NowPlaying
+      title="Bohemian Rhapsody"
+      artist="Queen"
+      singer="Alice"
+      elapsed={154}
+      duration={245}
     />
   </div>
 </Story>
