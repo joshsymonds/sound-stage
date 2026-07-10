@@ -1,0 +1,223 @@
+<script lang="ts">
+  import type { USDBResult } from "$lib/api";
+  import SongCard from "$lib/components/SongCard.svelte";
+  import type { Song } from "$lib/types";
+
+  let {
+    songs,
+    value,
+    searching,
+    loadingSongs,
+    dedupedUSDB,
+    downloadingIds,
+    oninput,
+    onqueue,
+    ondownload,
+  }: {
+    songs: Song[];
+    value: string;
+    searching: boolean;
+    loadingSongs: boolean;
+    dedupedUSDB: USDBResult[];
+    downloadingIds: Set<number>;
+    oninput: (value: string) => void;
+    onqueue: (song: Song) => void;
+    ondownload: (result: USDBResult) => void;
+  } = $props();
+
+  // Must match +page.svelte's SEARCH_MIN_CHARS — that copy gates when the
+  // owning component fires a USDB search; this copy only gates which
+  // presentational branch (search results vs. full library) is shown.
+  const SEARCH_MIN_CHARS = 2;
+
+  // Library filter is client-side and instant — no debounce. Songs is at most
+  // a few thousand entries; substring match across title + artist is cheap.
+  const filteredSongs = $derived.by(() => {
+    const q = value.trim().toLowerCase();
+    if (q.length < SEARCH_MIN_CHARS) return songs;
+    return songs.filter(
+      (s) => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q),
+    );
+  });
+  const isSearching = $derived(value.trim().length >= SEARCH_MIN_CHARS);
+</script>
+
+<div class="section">
+  <div class="search-bar">
+    <input
+      type="search"
+      class="search-input"
+      placeholder="Search by title or artist…"
+      {value}
+      oninput={(inputEvent) => oninput(inputEvent.currentTarget.value)}
+    />
+    {#if searching}
+      <span class="search-spinner" aria-label="Searching">…</span>
+    {/if}
+  </div>
+
+  {#if isSearching}
+    <div class="section-head" style="margin-top: var(--space-md);">
+      <div class="section-label">Results</div>
+      <div class="section-sub">
+        {filteredSongs.length > 0
+          ? "Library plays instantly · USDB downloads on tap"
+          : "Tap a USDB result to download (~30s) and queue"}
+      </div>
+    </div>
+    {#if filteredSongs.length === 0 && dedupedUSDB.length === 0 && !searching}
+      <div class="empty-prompt">
+        <p>No matches for &ldquo;{value}&rdquo;.</p>
+      </div>
+    {:else}
+      <div class="list">
+        {#each filteredSongs as song (song.id)}
+          <SongCard
+            title={song.title}
+            artist={song.artist}
+            edition={song.edition}
+            year={song.year}
+            coverUrl={`/api/library/${song.id}/cover`}
+            onclick={() => onqueue(song)}
+            badge="instant"
+          />
+        {/each}
+        {#each dedupedUSDB as result (result.id)}
+          <SongCard
+            title={result.title}
+            artist={result.artist}
+            coverUrl={`/api/usdb/cover/${String(result.id)}`}
+            onclick={() => ondownload(result)}
+          />
+          {#if downloadingIds.has(result.id)}
+            <div class="download-status">Downloading…</div>
+          {/if}
+        {/each}
+        {#if searching && dedupedUSDB.length === 0}
+          <div class="empty-prompt"><p>Searching USDB…</p></div>
+        {/if}
+      </div>
+    {/if}
+  {:else}
+    <div class="section-head" style="margin-top: var(--space-md);">
+      <div class="section-label">In your library</div>
+      <div class="section-sub">Plays instantly</div>
+    </div>
+    {#if loadingSongs}
+      <div class="empty-prompt"><p>Loading…</p></div>
+    {:else if filteredSongs.length > 0}
+      <div class="list">
+        {#each filteredSongs as song (song.id)}
+          <SongCard
+            title={song.title}
+            artist={song.artist}
+            edition={song.edition}
+            year={song.year}
+            coverUrl={`/api/library/${song.id}/cover`}
+            onclick={() => onqueue(song)}
+          />
+        {/each}
+      </div>
+    {:else}
+      <div class="empty-prompt">
+        <p>Nothing downloaded yet. Search above to grab a song.</p>
+      </div>
+    {/if}
+  {/if}
+</div>
+
+<style>
+  .section {
+    padding: var(--space-md) var(--space-lg);
+  }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+  }
+
+  .section-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--color-pink);
+    text-shadow: var(--glow-text-pink);
+    margin-bottom: var(--space-sm);
+  }
+
+  .section-head .section-label {
+    margin-bottom: 0;
+  }
+
+  .section-sub {
+    font-size: 0.6875rem;
+    color: var(--color-text-muted);
+    letter-spacing: 0.02em;
+  }
+
+  .search-spinner {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-text-muted);
+    font-size: 1.25rem;
+    padding: 0 var(--space-xs);
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+
+  .empty-prompt {
+    padding: var(--space-lg);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-md);
+  }
+
+  .empty-prompt p {
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+  }
+
+  .search-bar {
+    display: flex;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+  }
+
+  .search-input {
+    flex: 1;
+    padding: 10px 16px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    font-family: var(--font-body);
+    font-size: 0.875rem;
+    outline: none;
+    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+  }
+
+  .search-input:focus {
+    border-color: var(--color-pink);
+    box-shadow: var(--glow-pink);
+  }
+
+  .search-input::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  .download-status {
+    font-size: 0.75rem;
+    color: var(--color-cyan);
+    padding: 0 var(--space-md);
+    margin-top: calc(-1 * var(--space-xs));
+  }
+</style>

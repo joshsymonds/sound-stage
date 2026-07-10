@@ -15,15 +15,14 @@
   } from "$lib/api";
   import type { DeckStatus, USDBResult } from "$lib/api";
   import AppShell from "$lib/components/AppShell.svelte";
-  import Button from "$lib/components/Button.svelte";
   import NameEntry from "$lib/components/NameEntry.svelte";
-  import NowPlaying from "$lib/components/NowPlaying.svelte";
-  import QueueItem from "$lib/components/QueueItem.svelte";
-  import SongCard from "$lib/components/SongCard.svelte";
   import { dedupUSDBResults, libraryKeySet } from "$lib/dedup";
   import { displayElapsed } from "$lib/elapsed";
   import { clearGuestName, getGuestName, setGuestName } from "$lib/stores/session";
   import type { NowPlayingState, QueueEntry, Song } from "$lib/types";
+  import BrowseView from "$lib/views/BrowseView.svelte";
+  import NowPlayingView from "$lib/views/NowPlayingView.svelte";
+  import PartyView from "$lib/views/PartyView.svelte";
   import { onMount } from "svelte";
 
   const POLL_INTERVAL = 5000;
@@ -58,16 +57,6 @@
   const SEARCH_DEBOUNCE_MS = 300;
   const SEARCH_MIN_CHARS = 2;
 
-  // Library filter is client-side and instant — no debounce. Songs is at most
-  // a few thousand entries; substring match across title + artist is cheap.
-  const filteredSongs = $derived.by(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (q.length < SEARCH_MIN_CHARS) return songs;
-    return songs.filter(
-      (s) => s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q),
-    );
-  });
-  const isSearching = $derived(searchQuery.trim().length >= SEARCH_MIN_CHARS);
   // USDB results minus anything already in the library (normalized match).
   // Keeps "Bohemian Rhapsody (Live Aid)" visible alongside a library
   // "Bohemian Rhapsody" because the titles differ. The library-key set is
@@ -89,16 +78,6 @@
           paused,
         ),
   );
-
-  // Derive ordered (guest, count) pairs from the queue. Insertion-order is
-  // preserved by Map, which mirrors the round-robin guestOrder on the server.
-  const partyPeople = $derived.by(() => {
-    const counts = new Map<string, number>();
-    for (const entry of queue) {
-      counts.set(entry.guest, (counts.get(entry.guest) ?? 0) + 1);
-    }
-    return Array.from(counts, ([name, count]) => ({ name, count }));
-  });
 
   function showError(message: string): void {
     errorMessage = message;
@@ -223,7 +202,8 @@
     }
   }
 
-  function handleSearchInput(): void {
+  function handleSearchInput(value: string): void {
+    searchQuery = value;
     if (searchTimer !== null) clearTimeout(searchTimer);
     const query = searchQuery.trim();
     if (query.length < SEARCH_MIN_CHARS) {
@@ -303,7 +283,7 @@
   }
 
   function handleLeavePartyClick(): void {
-    const myCount = partyPeople.find((p) => p.name === guestName)?.count ?? 0;
+    const myCount = queue.filter((entry) => entry.guest === guestName).length;
     void leaveParty(myCount);
   }
 
@@ -363,213 +343,42 @@
     headerEnd={identityBadge}
   >
     {#if activeTab === "playing"}
-      <NowPlaying
-        title={nowPlaying?.title}
-        artist={nowPlaying?.artist}
-        elapsed={nowPlaying === null ? undefined : displayedElapsed}
-        duration={nowPlaying?.duration}
+      <NowPlayingView
+        {nowPlaying}
+        {displayedElapsed}
         {paused}
+        {queue}
+        {guestName}
         onpause={() => void handlePause()}
         onresume={() => void handleResume()}
+        onremove={(position) => void handleRemove(position)}
+        onbrowse={() => handleNavigate("browse")}
       />
-      {#if queue.length > 0}
-        <div class="section">
-          <div class="section-label">UP NEXT</div>
-          <div class="list">
-            {#each queue.slice(0, 3) as entry (entry.position)}
-              <QueueItem
-                position={entry.position}
-                title={entry.song.title}
-                artist={entry.song.artist}
-                guest={entry.guest}
-                isNext={entry.isNext}
-                onremove={entry.guest === guestName
-                  ? () => void handleRemove(entry.position)
-                  : undefined}
-              />
-            {/each}
-          </div>
-        </div>
-      {:else}
-        <div class="empty-prompt">
-          <p>Queue a song to get started, {guestName}!</p>
-          <Button onclick={() => handleNavigate("browse")}>Browse Songs</Button>
-        </div>
-      {/if}
-
     {:else if activeTab === "queue"}
-      <div class="section">
-        {#if partyPeople.length > 0}
-          <div class="section-head">
-            <div class="section-label">
-              {partyPeople.length}
-              {partyPeople.length === 1 ? "friend" : "friends"} ·
-              {queue.length}
-              {queue.length === 1 ? "song" : "songs"}
-            </div>
-          </div>
-          <div class="people-chips">
-            {#each partyPeople as person (person.name)}
-              <button
-                type="button"
-                class="people-chip"
-                class:me={person.name === guestName}
-                onclick={() => void handleRemovePerson(person.name, person.count)}
-                aria-label="Remove all of {person.name}'s songs"
-              >
-                <span class="chip-name">{person.name}</span>
-                <span class="chip-count">{person.count}</span>
-                <span class="chip-x" aria-hidden="true">&times;</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-
-        {#if queue.length > 0}
-          <div class="section-head" style="margin-top: var(--space-md);">
-            <div class="section-label">Up next</div>
-            <div class="section-sub">Round-robin order</div>
-          </div>
-          <div class="list">
-            {#each queue as entry (entry.position)}
-              <QueueItem
-                position={entry.position}
-                title={entry.song.title}
-                artist={entry.song.artist}
-                guest={entry.guest}
-                isNext={entry.isNext}
-                onremove={entry.guest === guestName
-                  ? () => void handleRemove(entry.position)
-                  : undefined}
-              />
-            {/each}
-          </div>
-        {:else}
-          <div class="empty-prompt">
-            <p>No songs queued yet.</p>
-            <Button onclick={() => handleNavigate("browse")}>Browse Songs</Button>
-          </div>
-        {/if}
-      </div>
-
+      <PartyView
+        {queue}
+        {guestName}
+        onremove={(position) => void handleRemove(position)}
+        onremoveperson={(name, count) => void handleRemovePerson(name, count)}
+        onbrowse={() => handleNavigate("browse")}
+      />
     {:else if activeTab === "browse"}
-      <div class="section">
-        <div class="search-bar">
-          <input
-            type="search"
-            class="search-input"
-            placeholder="Search by title or artist…"
-            bind:value={searchQuery}
-            oninput={handleSearchInput}
-          />
-          {#if searching}
-            <span class="search-spinner" aria-label="Searching">…</span>
-          {/if}
-        </div>
-
-        {#if isSearching}
-          <div class="section-head" style="margin-top: var(--space-md);">
-            <div class="section-label">Results</div>
-            <div class="section-sub">
-              {filteredSongs.length > 0 ? "Library plays instantly · USDB downloads on tap" : "Tap a USDB result to download (~30s) and queue"}
-            </div>
-          </div>
-          {#if filteredSongs.length === 0 && dedupedUSDB.length === 0 && !searching}
-            <div class="empty-prompt">
-              <p>No matches for &ldquo;{searchQuery}&rdquo;.</p>
-            </div>
-          {:else}
-            <div class="list">
-              {#each filteredSongs as song (song.id)}
-                <SongCard
-                  title={song.title}
-                  artist={song.artist}
-                  edition={song.edition}
-                  year={song.year}
-                  coverUrl={"/api/library/" + song.id + "/cover"}
-                  onclick={() => void handleQueueSong(song)}
-                  badge="instant"
-                />
-              {/each}
-              {#each dedupedUSDB as result (result.id)}
-                <SongCard
-                  title={result.title}
-                  artist={result.artist}
-                  coverUrl={"/api/usdb/cover/" + String(result.id)}
-                  onclick={() => void handleDownloadAndQueue(result)}
-                />
-                {#if downloadingIds.has(result.id)}
-                  <div class="download-status">Downloading…</div>
-                {/if}
-              {/each}
-              {#if searching && dedupedUSDB.length === 0}
-                <div class="empty-prompt"><p>Searching USDB…</p></div>
-              {/if}
-            </div>
-          {/if}
-        {:else}
-          <div class="section-head" style="margin-top: var(--space-md);">
-            <div class="section-label">In your library</div>
-            <div class="section-sub">Plays instantly</div>
-          </div>
-          {#if loadingSongs}
-            <div class="empty-prompt"><p>Loading…</p></div>
-          {:else if filteredSongs.length > 0}
-            <div class="list">
-              {#each filteredSongs as song (song.id)}
-                <SongCard
-                  title={song.title}
-                  artist={song.artist}
-                  edition={song.edition}
-                  year={song.year}
-                  coverUrl={"/api/library/" + song.id + "/cover"}
-                  onclick={() => void handleQueueSong(song)}
-                />
-              {/each}
-            </div>
-          {:else}
-            <div class="empty-prompt">
-              <p>Nothing downloaded yet. Search above to grab a song.</p>
-            </div>
-          {/if}
-        {/if}
-      </div>
+      <BrowseView
+        {songs}
+        value={searchQuery}
+        {searching}
+        {loadingSongs}
+        {dedupedUSDB}
+        {downloadingIds}
+        oninput={handleSearchInput}
+        onqueue={(song) => void handleQueueSong(song)}
+        ondownload={(result) => void handleDownloadAndQueue(result)}
+      />
     {/if}
   </AppShell>
 {/if}
 
 <style>
-  .section {
-    padding: var(--space-md) var(--space-lg);
-  }
-
-  .section-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-sm);
-    margin-bottom: var(--space-sm);
-  }
-
-  .section-label {
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    color: var(--color-pink);
-    text-shadow: var(--glow-text-pink);
-    margin-bottom: var(--space-sm);
-  }
-
-  .section-head .section-label {
-    margin-bottom: 0;
-  }
-
-  .section-sub {
-    font-size: 0.6875rem;
-    color: var(--color-text-muted);
-    letter-spacing: 0.02em;
-  }
-
   .identity-badge {
     display: inline-flex;
     align-items: center;
@@ -607,130 +416,6 @@
   .identity-badge:hover .identity-leave,
   .identity-badge:focus-visible .identity-leave {
     color: var(--color-pink);
-  }
-
-  .people-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-xs);
-    margin-bottom: var(--space-md);
-  }
-
-  .people-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 8px 6px 12px;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-full);
-    color: var(--color-text);
-    font-family: var(--font-body);
-    font-size: 0.8125rem;
-    cursor: pointer;
-    transition: color var(--transition-normal), border-color var(--transition-normal),
-      box-shadow var(--transition-normal);
-  }
-
-  .people-chip:hover,
-  .people-chip:focus-visible {
-    border-color: var(--color-pink);
-    color: var(--color-text);
-    box-shadow: var(--glow-pink);
-    outline: none;
-  }
-
-  .people-chip.me {
-    border-color: var(--color-pink);
-    color: var(--color-pink);
-  }
-
-  .chip-name {
-    font-weight: 600;
-  }
-
-  .chip-count {
-    font-size: 0.6875rem;
-    color: var(--color-text-muted);
-    background: var(--color-surface-raised);
-    padding: 1px 6px;
-    border-radius: var(--radius-full);
-    line-height: 1.4;
-  }
-
-  .chip-x {
-    font-size: 1.1rem;
-    line-height: 1;
-    color: var(--color-text-muted);
-    margin-left: 2px;
-  }
-
-  .people-chip:hover .chip-x,
-  .people-chip:focus-visible .chip-x {
-    color: var(--color-pink);
-  }
-
-  .search-spinner {
-    display: inline-flex;
-    align-items: center;
-    color: var(--color-text-muted);
-    font-size: 1.25rem;
-    padding: 0 var(--space-xs);
-  }
-
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-sm);
-  }
-
-  .empty-prompt {
-    padding: var(--space-lg);
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-md);
-  }
-
-  .empty-prompt p {
-    color: var(--color-text-muted);
-    font-size: 0.875rem;
-  }
-
-  .search-bar {
-    display: flex;
-    gap: var(--space-sm);
-    margin-bottom: var(--space-md);
-  }
-
-  .search-input {
-    flex: 1;
-    padding: 10px 16px;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
-    color: var(--color-text);
-    font-family: var(--font-body);
-    font-size: 0.875rem;
-    outline: none;
-    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
-  }
-
-  .search-input:focus {
-    border-color: var(--color-pink);
-    box-shadow: var(--glow-pink);
-  }
-
-  .search-input::placeholder {
-    color: var(--color-text-muted);
-  }
-
-  .download-status {
-    font-size: 0.75rem;
-    color: var(--color-cyan);
-    padding: 0 var(--space-md);
-    margin-top: calc(-1 * var(--space-xs));
   }
 
   .toast {
