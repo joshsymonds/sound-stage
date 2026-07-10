@@ -1,7 +1,12 @@
 <script lang="ts">
   import type { USDBResult } from "$lib/api";
+  import CoverTile from "$lib/components/CoverTile.svelte";
+  import FastScrollRail from "$lib/components/FastScrollRail.svelte";
+  import ShelfRow from "$lib/components/ShelfRow.svelte";
   import SongCard from "$lib/components/SongCard.svelte";
+  import { byDecade, duets, genreShelf, recentlyAdded } from "$lib/shelves";
   import type { Song } from "$lib/types";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
 
   let {
     songs,
@@ -40,6 +45,55 @@
     );
   });
   const isSearching = $derived(value.trim().length >= SEARCH_MIN_CHARS);
+
+  // Fast-scroll-rail bucketing: an artist's initial, or "#" for anything
+  // that doesn't start with a plain A-Z letter.
+  function initialLetter(song: Song): string {
+    const first = song.artist.trim().charAt(0).toUpperCase();
+    return /^[A-Z]$/.test(first) ? first : "#";
+  }
+
+  // "#" isn't safe inside a CSS id selector unescaped, so anchor ids spell
+  // it out instead of embedding the character directly.
+  function anchorSlug(letter: string): string {
+    return letter === "#" ? "hash" : letter;
+  }
+
+  const recentSongs = $derived(recentlyAdded(songs));
+  const decadeShelves = $derived(byDecade(songs));
+  const duetSongs = $derived(duets(songs));
+  const popSongs = $derived(genreShelf(songs, "pop"));
+  const rockSongs = $derived(genreShelf(songs, "rock"));
+  const soundtrackSongs = $derived(genreShelf(songs, "soundtrack"));
+
+  const sortedSongs = $derived(
+    [...songs].sort(
+      (a, b) =>
+        a.artist.localeCompare(b.artist, undefined, { sensitivity: "base" }) ||
+        a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+    ),
+  );
+
+  const presentLetters = $derived(new SvelteSet(sortedSongs.map((song) => initialLetter(song))));
+
+  // First song per letter (in crate order) gets a DOM id so the fast-scroll
+  // rail can jump straight to it.
+  const anchorIdsBySongId = $derived.by(() => {
+    const seen = new SvelteSet<string>();
+    const anchors = new SvelteMap<string, string>();
+    for (const song of sortedSongs) {
+      const letter = initialLetter(song);
+      if (!seen.has(letter)) {
+        seen.add(letter);
+        anchors.set(song.id, `crate-${anchorSlug(letter)}`);
+      }
+    }
+    return anchors;
+  });
+
+  function jumpToLetter(letter: string): void {
+    document.querySelector(`#crate-${anchorSlug(letter)}`)?.scrollIntoView({ block: "start" });
+  }
 </script>
 
 <div class="section">
@@ -70,18 +124,14 @@
         <p>No matches for &ldquo;{value}&rdquo;.</p>
       </div>
     {:else}
+      {#if filteredSongs.length > 0}
+        <div class="crate-grid">
+          {#each filteredSongs as song (song.id)}
+            <CoverTile {song} {onqueue} />
+          {/each}
+        </div>
+      {/if}
       <div class="list">
-        {#each filteredSongs as song (song.id)}
-          <SongCard
-            title={song.title}
-            artist={song.artist}
-            edition={song.edition}
-            year={song.year}
-            coverUrl={`/api/library/${song.id}/cover`}
-            onclick={() => onqueue(song)}
-            badge="instant"
-          />
-        {/each}
         {#each dedupedUSDB as result (result.id)}
           <SongCard
             title={result.title}
@@ -98,31 +148,31 @@
         {/if}
       </div>
     {/if}
-  {:else}
-    <div class="section-head" style="margin-top: var(--space-md);">
-      <div class="section-label">In your library</div>
-      <div class="section-sub">Plays instantly</div>
+  {:else if loadingSongs}
+    <div class="empty-prompt"><p>Loading…</p></div>
+  {:else if songs.length === 0}
+    <div class="empty-prompt">
+      <p>Nothing downloaded yet. Search above to grab a song.</p>
     </div>
-    {#if loadingSongs}
-      <div class="empty-prompt"><p>Loading…</p></div>
-    {:else if filteredSongs.length > 0}
-      <div class="list">
-        {#each filteredSongs as song (song.id)}
-          <SongCard
-            title={song.title}
-            artist={song.artist}
-            edition={song.edition}
-            year={song.year}
-            coverUrl={`/api/library/${song.id}/cover`}
-            onclick={() => onqueue(song)}
-          />
-        {/each}
-      </div>
-    {:else}
-      <div class="empty-prompt">
-        <p>Nothing downloaded yet. Search above to grab a song.</p>
-      </div>
-    {/if}
+  {:else}
+    <ShelfRow label="Recently Added" songs={recentSongs} {onqueue} />
+    {#each decadeShelves as decade (decade.label)}
+      <ShelfRow label={decade.label} songs={decade.songs} {onqueue} />
+    {/each}
+    <ShelfRow label="Duets" songs={duetSongs} {onqueue} />
+    <ShelfRow label="Pop" songs={popSongs} {onqueue} />
+    <ShelfRow label="Rock" songs={rockSongs} {onqueue} />
+    <ShelfRow label="Soundtracks" songs={soundtrackSongs} {onqueue} />
+
+    <div class="section-head" style="margin-top: var(--space-md);">
+      <div class="section-label">All Songs</div>
+    </div>
+    <div class="crate-grid">
+      {#each sortedSongs as song (song.id)}
+        <CoverTile {song} {onqueue} id={anchorIdsBySongId.get(song.id)} />
+      {/each}
+    </div>
+    <FastScrollRail letters={presentLetters} onjump={jumpToLetter} />
   {/if}
 </div>
 
@@ -170,6 +220,13 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);
+  }
+
+  .crate-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-sm);
+    margin-bottom: var(--space-lg);
   }
 
   .empty-prompt {
