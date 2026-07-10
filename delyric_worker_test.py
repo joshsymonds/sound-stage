@@ -13,27 +13,34 @@ from fastapi.testclient import TestClient
 def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Reset module-level state and point DELYRIC_LIBRARY at an isolated tmp dir."""
     monkeypatch.setenv("DELYRIC_LIBRARY", str(tmp_path))
+    import delyric
     import delyric_worker as dw
 
     dw._reset_for_tests()
     assert dw._worker_thread is None
+    # AUDIO_SEPARATOR is a module global the lifespan assigns directly (not via
+    # monkeypatch), so it can leak across tests unless reset here too.
+    delyric.AUDIO_SEPARATOR = None
     yield tmp_path
     dw._reset_for_tests()
+    delyric.AUDIO_SEPARATOR = None
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Yield a TestClient with lifespan events active (worker thread running).
 
-    The CUDA startup probe is mocked to succeed by default here — this machine
-    has no GPU, so a real probe would fail startup for every test using this
-    fixture. TestCudaStartupProbe below exercises the real wiring by
-    overriding this mock.
+    The CUDA and audio-separator startup probes are mocked to succeed by
+    default here — this machine may lack a GPU or the venv's audio-separator
+    binary, so a real probe would fail startup for every test using this
+    fixture. TestCudaStartupProbe and TestAudioSeparatorStartupProbe below
+    exercise the real wiring by overriding these mocks.
     """
     import delyric
     import delyric_worker as dw
 
     monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+    monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
     with TestClient(dw.app) as c:
         yield c
 
@@ -247,6 +254,43 @@ class TestCudaStartupProbe:
 
         monkeypatch.setattr(delyric, "verify_cuda", boom)
         with pytest.raises(RuntimeError, match="CUDA"):
+            with TestClient(dw.app):
+                pass
+
+
+class TestAudioSeparatorStartupProbe:
+    """Lifespan startup must resolve delyric.AUDIO_SEPARATOR itself.
+
+    process_song only runs via the CLI's main() in the reference flow, which
+    populates AUDIO_SEPARATOR before processing; the worker calls process_song
+    directly and skips main() entirely, so without this the global stays None
+    and separate_song builds its command with None as argv[0].
+    """
+
+    def test_lifespan_populates_audio_separator(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/sentinel/audio-separator")
+        with TestClient(dw.app):
+            assert delyric.AUDIO_SEPARATOR == "/sentinel/audio-separator"
+
+    def test_lifespan_fails_fast_when_audio_separator_missing(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+
+        def boom() -> str:
+            raise RuntimeError("audio-separator not found on PATH")
+
+        monkeypatch.setattr(delyric, "resolve_audio_separator", boom)
+        with pytest.raises(RuntimeError, match="audio-separator"):
             with TestClient(dw.app):
                 pass
 

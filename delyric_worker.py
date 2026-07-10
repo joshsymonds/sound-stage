@@ -212,6 +212,12 @@ def bind_host_available(host: str) -> bool:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # process_song reads delyric.AUDIO_SEPARATOR as a module global; only the
+    # CLI's main() populates it before processing (delyric.py's main()), and
+    # the worker calls process_song directly without going through main(), so
+    # it must resolve it here itself — mirrors main()'s ordering (resolve
+    # audio-separator, then verify_cuda) before any job is accepted.
+    delyric.AUDIO_SEPARATOR = delyric.resolve_audio_separator()
     # Fail fast under systemd rather than silently falling back to CPU (see
     # delyric.verify_cuda's docstring for why that's dangerous on a queue).
     delyric.verify_cuda()

@@ -41,7 +41,10 @@ if [ "${needs_install}" = "1" ]; then
 fi
 
 export LD_LIBRARY_PATH="${NATIVE_LIBS}:/run/opengl-driver/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-export PATH="${FFMPEG_BIN}:${PATH:-}"
+# Prepend the venv's bin/ so resolve_audio_separator's shutil.which() finds
+# audio-separator under systemd, which execs python directly and never
+# otherwise puts the venv on PATH.
+export PATH="${VENV}/bin:${FFMPEG_BIN}:${PATH:-}"
 
 cd "${SRC_DIR}"
 exec "${VENV}/bin/python" "${SRC_DIR}/delyric_worker.py"
