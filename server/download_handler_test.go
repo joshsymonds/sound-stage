@@ -1,13 +1,16 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -517,6 +520,291 @@ func waitForArchived(t *testing.T, outputDir string, songID int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("song %d never marked as downloaded", songID)
+}
+
+// fakeDelyricWorker records the songPath from every POST /process request it
+// receives. safe for concurrent use since the download goroutine posts to it
+// from outside the test's goroutine.
+type fakeDelyricWorker struct {
+	mu         sync.Mutex
+	songPaths  []string
+	statusCode int // 0 defaults to 200
+}
+
+func (f *fakeDelyricWorker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	f.mu.Lock()
+	f.songPaths = append(f.songPaths, body["songPath"])
+	status := f.statusCode
+	f.mu.Unlock()
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+}
+
+func (f *fakeDelyricWorker) requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.songPaths...)
+}
+
+// syncBuffer wraps a bytes.Buffer with a mutex so a slog.Logger can be safely
+// written to from the download goroutine while the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitForRequestCount polls fn until it returns the wanted count or the
+// deadline elapses, then fails the test.
+func waitForRequestCount(t *testing.T, want int, fn func() int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := fn(); got == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("request count never reached %d (got %d)", want, fn())
+}
+
+func TestDownloadAutoEnqueuesDelyric(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful download posts songPath to delyric worker", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeDelyricWorker{}
+		worker := httptest.NewServer(fake)
+		defer worker.Close()
+
+		outputDir := t.TempDir()
+		queue := server.NewQueue()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:     &mockDownloader{youTubeIDs: []string{"dQw4w9WgXcQ"}},
+			YtDlp:      &mockYtDlp{},
+			OutputDir:  outputDir,
+			Queue:      queue,
+			DelyricURL: worker.URL,
+		})
+
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		waitForRequestCount(t, 1, func() int { return len(fake.requests()) })
+
+		wantDir := filepath.Join(outputDir, usdb.SanitizePath("Test - Song"))
+		reqs := fake.requests()
+		if len(reqs) != 1 {
+			t.Fatalf("expected exactly 1 delyric request, got %d: %v", len(reqs), reqs)
+		}
+		if reqs[0] != wantDir {
+			t.Errorf("songPath = %q, want %q", reqs[0], wantDir)
+		}
+
+		// One POST only — a second poll interval shouldn't add more.
+		time.Sleep(100 * time.Millisecond)
+		if got := len(fake.requests()); got != 1 {
+			t.Errorf("expected exactly 1 delyric request total, got %d", got)
+		}
+	})
+
+	t.Run("worker 500 does not fail download or block queueing", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeDelyricWorker{statusCode: http.StatusInternalServerError}
+		worker := httptest.NewServer(fake)
+		defer worker.Close()
+
+		logBuf := &syncBuffer{}
+		logger := slog.New(slog.NewTextHandler(logBuf, nil))
+
+		outputDir := t.TempDir()
+		queue := server.NewQueue()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:     &mockDownloader{youTubeIDs: []string{"dQw4w9WgXcQ"}},
+			YtDlp:      &mockYtDlp{},
+			OutputDir:  outputDir,
+			Queue:      queue,
+			DelyricURL: worker.URL,
+			Logger:     logger,
+		})
+
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		waitForQueueLen(t, queue, 1)
+		waitForRequestCount(t, 1, func() int { return len(fake.requests()) })
+
+		if !strings.Contains(logBuf.String(), "level=WARN") {
+			t.Errorf("expected a Warn log for delyric 500, got: %s", logBuf.String())
+		}
+	})
+
+	t.Run("no delyric URL configured skips the POST", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeDelyricWorker{}
+		worker := httptest.NewServer(fake)
+		defer worker.Close()
+
+		outputDir := t.TempDir()
+		queue := server.NewQueue()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:    &mockDownloader{youTubeIDs: []string{"dQw4w9WgXcQ"}},
+			YtDlp:     &mockYtDlp{},
+			OutputDir: outputDir,
+			Queue:     queue,
+			// DelyricURL intentionally left empty.
+		})
+
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		waitForQueueLen(t, queue, 1)
+		if got := len(fake.requests()); got != 0 {
+			t.Errorf("expected 0 delyric requests with no DelyricURL, got %d", got)
+		}
+	})
+
+	t.Run("worker unreachable does not fail download or block queueing", func(t *testing.T) {
+		t.Parallel()
+		outputDir := t.TempDir()
+		queue := server.NewQueue()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:     &mockDownloader{youTubeIDs: []string{"dQw4w9WgXcQ"}},
+			YtDlp:      &mockYtDlp{},
+			OutputDir:  outputDir,
+			Queue:      queue,
+			DelyricURL: "http://127.0.0.1:1", // unreachable port
+		})
+
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		waitForQueueLen(t, queue, 1)
+	})
+
+	t.Run("already-downloaded catches up when instrumental.webm is missing", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeDelyricWorker{}
+		worker := httptest.NewServer(fake)
+		defer worker.Close()
+
+		outputDir := t.TempDir()
+		if err := archive.MarkDownloaded(outputDir, 99999); err != nil {
+			t.Fatal(err)
+		}
+		songDir := filepath.Join(outputDir, usdb.SanitizePath("Test - Song"))
+		if err := os.MkdirAll(songDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		txtPath := filepath.Join(songDir, "song.txt")
+		if err := os.WriteFile(txtPath,
+			[]byte("#TITLE:Song\n#ARTIST:Test\n#MP3:audio.webm\n: 0 5 10 Hello\nE\n"),
+			0o600); err != nil {
+			t.Fatal(err)
+		}
+		// No instrumental.webm present.
+
+		queue := server.NewQueue()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:     &mockDownloader{},
+			YtDlp:      &mockYtDlp{},
+			OutputDir:  outputDir,
+			Queue:      queue,
+			DelyricURL: worker.URL,
+		})
+
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 (already_downloaded), got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		waitForRequestCount(t, 1, func() int { return len(fake.requests()) })
+		reqs := fake.requests()
+		if len(reqs) != 1 || reqs[0] != songDir {
+			t.Errorf("delyric requests = %v, want exactly [%q]", reqs, songDir)
+		}
+	})
+
+	t.Run("already-downloaded skips catch-up when instrumental.webm exists", func(t *testing.T) {
+		t.Parallel()
+		fake := &fakeDelyricWorker{}
+		worker := httptest.NewServer(fake)
+		defer worker.Close()
+
+		outputDir := t.TempDir()
+		if err := archive.MarkDownloaded(outputDir, 99999); err != nil {
+			t.Fatal(err)
+		}
+		songDir := filepath.Join(outputDir, usdb.SanitizePath("Test - Song"))
+		if err := os.MkdirAll(songDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		txtPath := filepath.Join(songDir, "song.txt")
+		if err := os.WriteFile(txtPath,
+			[]byte("#TITLE:Song\n#ARTIST:Test\n#MP3:audio.webm\n: 0 5 10 Hello\nE\n"),
+			0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(songDir, "instrumental.webm"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		queue := server.NewQueue()
+		handler := server.DownloadHandler(server.DownloadConfig{
+			Client:     &mockDownloader{},
+			YtDlp:      &mockYtDlp{},
+			OutputDir:  outputDir,
+			Queue:      queue,
+			DelyricURL: worker.URL,
+		})
+
+		body := `{"songId": 99999, "guest": "Alice"}`
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/download", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 (already_downloaded), got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		waitForQueueLen(t, queue, 1)
+		// Give any wrongly-fired async POST a moment to land before asserting zero.
+		time.Sleep(100 * time.Millisecond)
+		if got := len(fake.requests()); got != 0 {
+			t.Errorf("expected 0 delyric requests when instrumental.webm exists, got %d", got)
+		}
+	})
 }
 
 func containsBoth(s []string, a, b string) bool {
