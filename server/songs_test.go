@@ -22,6 +22,11 @@ func writeSongTxt(t *testing.T, dir, artist, title string) {
 	if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The scanner requires the #MP3 file to exist — a song without audio is
+	// unplayable on the Deck and must not be listed.
+	if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSongsHandler(t *testing.T) {
@@ -116,6 +121,38 @@ func TestSongsHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("skips songs whose audio file is missing", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeSongTxt(t, dir, "Queen", "Bohemian Rhapsody")
+		// A parseable .txt whose #MP3 file never landed (interrupted
+		// download). USDX refuses these, so the library must not list them.
+		ghostDir := filepath.Join(dir, "Ghost - No Audio")
+		if err := os.MkdirAll(ghostDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		ghostTxt := "#TITLE:No Audio\n#ARTIST:Ghost\n#MP3:audio.webm\n: 0 5 10 Boo\nE\n"
+		if err := os.WriteFile(filepath.Join(ghostDir, "song.txt"), []byte(ghostTxt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		handler := server.SongsHandler(server.NewLibraryCache(), dir)
+		req := httptest.NewRequest(http.MethodGet, "/api/songs", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		var songs []server.Song
+		if err := json.Unmarshal(rec.Body.Bytes(), &songs); err != nil {
+			t.Fatal(err)
+		}
+		if len(songs) != 1 {
+			t.Fatalf("expected 1 song, got %d", len(songs))
+		}
+		if songs[0].Artist != "Queen" {
+			t.Errorf("surviving song artist = %q, want Queen", songs[0].Artist)
+		}
+	})
+
 	t.Run("IDs are stableid hashes of (artist, title, duet)", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
@@ -154,6 +191,9 @@ func TestSongsHandler(t *testing.T) {
 			}
 			txt := "#TITLE:Dancing Queen\n#ARTIST:ABBA\n#MP3:audio.webm\n: 0 5 10 Hi\nE\n"
 			if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -212,6 +252,9 @@ func TestSongsHandler(t *testing.T) {
 		}
 		txt := "#TITLE:Islands\n#ARTIST:Kenny & Dolly\n#MP3:audio.webm\nP1\n: 0 4 60 X\nP2\n: 4 4 60 Y\nE\n"
 		if err := os.WriteFile(filepath.Join(songDir, "song.txt"), []byte(txt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 

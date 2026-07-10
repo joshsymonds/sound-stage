@@ -293,6 +293,9 @@ func TestLibraryCoverHandler(t *testing.T) {
 			[]byte("#TITLE:Song\n#ARTIST:Test\n#MP3:audio.webm\n: 0 5 10 Hello\nE\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(songDir, "cover.jpg"), []byte("COVERBYTES"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -332,6 +335,9 @@ func TestLibraryCoverHandler(t *testing.T) {
 		}
 		if err := os.WriteFile(filepath.Join(songDir, "song.txt"),
 			[]byte("#TITLE:Song\n#ARTIST:Test\n#MP3:audio.webm\n: 0 5 10 Hello\nE\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(songDir, "audio.webm"), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		// No cover.jpg.
