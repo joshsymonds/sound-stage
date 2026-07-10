@@ -166,7 +166,12 @@ in {
         # confirms the worker runs correctly with it enabled.
         MemoryDenyWriteExecute = false;
         SystemCallArchitectures = "native";
-        SystemCallFilter = ["@system-service" "~@privileged" "~@resources"];
+        # Denylist, not the @system-service allowlist: torch's CUDA init was
+        # seccomp-killed (SIGSYS, probe returncode -31) under the allowlist —
+        # it makes NUMA/affinity calls (@resources) and newer raw syscalls
+        # that @system-service doesn't include. Blocking @privileged keeps
+        # the dangerous class out without enumerating an ML runtime's needs.
+        SystemCallFilter = ["~@privileged"];
         CapabilityBoundingSet = [""];
         AmbientCapabilities = [""];
         UMask = "0077";
