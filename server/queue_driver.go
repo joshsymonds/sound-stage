@@ -320,7 +320,7 @@ func (d *QueueDriver) handleUnknownSong(entry *QueueEntry) {
 		return
 	}
 	txtPath := filepath.Join(dir, "song.txt")
-	if mapped, mappedOK := deckPath(txtPath, d.lib.Dir, d.lib.DeckDir); mappedOK {
+	if mapped, mappedOK := DeckPath(txtPath, d.lib.Dir, d.lib.DeckDir); mappedOK {
 		txtPath = mapped
 	}
 	if !notifyDeck(context.Background(), d.client, d.deckURL, txtPath, d.logger) {

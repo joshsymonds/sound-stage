@@ -351,7 +351,7 @@ func finalizeDownload(
 	// USDX doesn't know the song and the queue driver would 404 on stage.
 	if dlConfig.DeckURL != "" {
 		refreshPath := txtPath
-		if mapped, ok := deckPath(txtPath, dlConfig.OutputDir, dlConfig.DeckLibraryDir); ok {
+		if mapped, ok := DeckPath(txtPath, dlConfig.OutputDir, dlConfig.DeckLibraryDir); ok {
 			refreshPath = mapped
 		}
 		if !notifyDeck(ctx, dlConfig.HTTPClient, dlConfig.DeckURL, refreshPath, logger) {

@@ -52,12 +52,12 @@ func TestDeckPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := deckPath(tt.serverPath, tt.libraryDir, tt.deckLibraryDir)
+			got, ok := DeckPath(tt.serverPath, tt.libraryDir, tt.deckLibraryDir)
 			if ok != tt.wantOK {
-				t.Fatalf("deckPath ok = %v, want %v", ok, tt.wantOK)
+				t.Fatalf("DeckPath ok = %v, want %v", ok, tt.wantOK)
 			}
 			if ok && got != tt.want {
-				t.Errorf("deckPath = %q, want %q", got, tt.want)
+				t.Errorf("DeckPath = %q, want %q", got, tt.want)
 			}
 		})
 	}
