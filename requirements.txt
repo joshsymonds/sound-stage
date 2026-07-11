@@ -1,10 +1,28 @@
-# Pinned: matches the version currently proven to work in devenv.nix with
-# the 3-model karaoke MelBand Roformer ensemble (aufr33/viperx + gabox v2 +
-# becruily, avg_wave) on the 5070 Ti. Newer releases have shipped breaking
-# ensemble-CLI changes — bump deliberately, not casually. Verified in this
-# workspace's venv: the [gpu] extra pulls torch 2.13.0+cu130 (CUDA 13.0),
-# which supports sm_120/Blackwell.
-audio-separator[gpu]==0.44.3
+# Inference-only deps for ZFTurbo's Music-Source-Separation-Training (MSST) —
+# the checkout itself is pinned separately (see nix/delyric-worker.nix,
+# DELYRIC_MSST_DIR) and is NOT installed from PyPI. Deliberately excludes
+# MSST's own requirements.txt, which pulls training-only packages
+# (pedalboard, wxpython, pyaudio, ...) that don't build on Python 3.13.
+# torch is pinned directly here (previously pulled in transitively via
+# audio-separator[gpu]==0.44.3, which this replaces) — no special
+# --index-url, same plain-PyPI mechanism as before. Verified in this
+# workspace's venv: version 2.13.0 resolves to the +cu130 (CUDA 13.0) wheel,
+# which supports sm_120/Blackwell. torchaudio is deliberately absent: MSST's
+# inference path reads/writes audio via librosa/soundfile, never imports
+# torchaudio, and the gnomon showcase venv has no torchaudio installed at
+# all. A pin wouldn't even resolve — torchaudio's PyPI versioning diverged
+# from torch's after 2.9.x, so there is no 2.13.0 release to match.
+torch==2.13.0
+librosa
+soundfile
+einops
+beartype
+rotary_embedding_torch
+hyper_connections
+ml_collections
+omegaconf
+matplotlib
+pyyaml
 fastapi==0.135.0
 uvicorn[standard]==0.37.0
 pydantic>=2.10,<3

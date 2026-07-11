@@ -1,5 +1,8 @@
 """Tests for delyric.py — update_song_txt and is_processed logic."""
 
+import ast
+import hashlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -131,93 +134,564 @@ class TestUpdateSongTxt:
         assert "#VOCALS:vocals.webm" in content
 
 
-class TestSeparateSongCommand:
-    """separate_song must invoke the 3-model karaoke Roformer ensemble.
+class TestResolveMsstDir:
+    """resolve_msst_dir() must fail loudly instead of silently proceeding
+    with a broken/missing MSST checkout — same fail-fast shape as
+    resolve_audio_separator had for the old engine."""
 
-    Uses tempfile directly (not the tmp_path fixture) so these directory
-    paths never embed the test's own name into argv — pytest's tmp_path is
-    derived from the test function name, which would make e.g.
-    "test_no_htdemucs_anywhere_in_argv" falsely fail a substring scan of its
-    own --output_dir path.
-    """
+    def test_raises_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("DELYRIC_MSST_DIR", raising=False)
+        with pytest.raises(RuntimeError, match="DELYRIC_MSST_DIR"):
+            delyric.resolve_msst_dir()
 
-    def _run_separate_song(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-        """Run separate_song with subprocess.run mocked, return the captured argv."""
+    def test_raises_when_inference_py_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DELYRIC_MSST_DIR", str(tmp_path))
+        with pytest.raises(RuntimeError, match="inference.py"):
+            delyric.resolve_msst_dir()
+
+    def test_returns_path_when_valid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "inference.py").write_text("")
+        monkeypatch.setenv("DELYRIC_MSST_DIR", str(tmp_path))
+        assert delyric.resolve_msst_dir() == tmp_path
+
+
+class TestResolveModelDir:
+    """resolve_model_dir() must fail loudly when DELYRIC_MODEL_DIR is unset —
+    unlike audio-separator, MSST checkpoints have no baked-in registry cache
+    to fall back to."""
+
+    def test_raises_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("DELYRIC_MODEL_DIR", raising=False)
+        with pytest.raises(RuntimeError, match="DELYRIC_MODEL_DIR"):
+            delyric.resolve_model_dir()
+
+    def test_returns_path_when_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DELYRIC_MODEL_DIR", str(tmp_path))
+        assert delyric.resolve_model_dir() == tmp_path
+
+
+class TestEnsureModelFile:
+    """_ensure_model_file downloads+verifies a single checkpoint/config file."""
+
+    def test_downloads_and_verifies_new_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        content = b"fake checkpoint bytes"
+        expected_sha = hashlib.sha256(content).hexdigest()
+        calls = []
+
+        def fake_download(url: str, dest: Path) -> None:
+            calls.append(url)
+            Path(dest).write_bytes(content)
+
+        monkeypatch.setattr(delyric, "_download_file", fake_download)
+        result = delyric._ensure_model_file(
+            tmp_path, "model.ckpt", "https://example.com/model.ckpt", expected_sha
+        )
+        assert result == tmp_path / "model.ckpt"
+        assert result.read_bytes() == content
+        assert calls == ["https://example.com/model.ckpt"]
+        # No leftover partial-download file.
+        assert list(tmp_path.iterdir()) == [tmp_path / "model.ckpt"]
+
+    def test_raises_loudly_on_sha256_mismatch_after_download(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_download(url: str, dest: Path) -> None:
+            Path(dest).write_bytes(b"wrong bytes")
+
+        monkeypatch.setattr(delyric, "_download_file", fake_download)
+        with pytest.raises(RuntimeError, match="sha256"):
+            delyric._ensure_model_file(
+                tmp_path, "model.ckpt", "https://example.com/model.ckpt", "0" * 64
+            )
+        # Refuses to leave a corrupted file at the real destination or a stray partial.
+        assert list(tmp_path.iterdir()) == []
+
+    def test_skips_download_when_existing_file_matches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        content = b"already here"
+        expected_sha = hashlib.sha256(content).hexdigest()
+        (tmp_path / "model.ckpt").write_bytes(content)
+
+        def fail_download(url: str, dest: Path) -> None:
+            raise AssertionError("should not download when the existing file already verifies")
+
+        monkeypatch.setattr(delyric, "_download_file", fail_download)
+        result = delyric._ensure_model_file(
+            tmp_path, "model.ckpt", "https://example.com/model.ckpt", expected_sha
+        )
+        assert result == tmp_path / "model.ckpt"
+
+    def test_raises_loudly_when_existing_file_sha256_mismatches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "model.ckpt").write_bytes(b"corrupted")
+
+        def fail_download(url: str, dest: Path) -> None:
+            raise AssertionError("should raise on the bad existing file, not attempt a download")
+
+        monkeypatch.setattr(delyric, "_download_file", fail_download)
+        with pytest.raises(RuntimeError, match="sha256"):
+            delyric._ensure_model_file(
+                tmp_path, "model.ckpt", "https://example.com/model.ckpt", "0" * 64
+            )
+
+
+class TestEnsureMsstModels:
+    """ensure_msst_models() must resolve every model's ckpt+yaml, keyed by model."""
+
+    def test_downloads_all_models_ckpt_and_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_table = {
+            "a": {
+                "model_type": "bs_roformer",
+                "ckpt_filename": "a.ckpt",
+                "ckpt_url": "https://example.com/a.ckpt",
+                "ckpt_sha256": hashlib.sha256(b"a-ckpt").hexdigest(),
+                "yaml_filename": "a.yaml",
+                "yaml_url": "https://example.com/a.yaml",
+                "yaml_sha256": hashlib.sha256(b"a-yaml").hexdigest(),
+            },
+            "b": {
+                "model_type": "mel_band_roformer",
+                "ckpt_filename": "b.ckpt",
+                "ckpt_url": "https://example.com/b.ckpt",
+                "ckpt_sha256": hashlib.sha256(b"b-ckpt").hexdigest(),
+                "yaml_filename": "b.yaml",
+                "yaml_url": "https://example.com/b.yaml",
+                "yaml_sha256": hashlib.sha256(b"b-yaml").hexdigest(),
+            },
+        }
+        content_by_url = {
+            "https://example.com/a.ckpt": b"a-ckpt",
+            "https://example.com/a.yaml": b"a-yaml",
+            "https://example.com/b.ckpt": b"b-ckpt",
+            "https://example.com/b.yaml": b"b-yaml",
+        }
+
+        def fake_download(url: str, dest: Path) -> None:
+            Path(dest).write_bytes(content_by_url[url])
+
+        monkeypatch.setattr(delyric, "MSST_MODELS", fake_table)
+        monkeypatch.setattr(delyric, "_download_file", fake_download)
+
+        resolved = delyric.ensure_msst_models(tmp_path)
+
+        assert set(resolved) == {"a", "b"}
+        assert resolved["a"]["model_type"] == "bs_roformer"
+        assert resolved["a"]["ckpt"] == tmp_path / "a.ckpt"
+        assert resolved["a"]["yaml"] == tmp_path / "a.yaml"
+        assert resolved["b"]["model_type"] == "mel_band_roformer"
+        assert resolved["b"]["ckpt"] == tmp_path / "b.ckpt"
+        assert resolved["b"]["yaml"] == tmp_path / "b.yaml"
+
+
+class TestMsstModelsTableIntegrity:
+    """Guards the transcribed model constants — these exact URLs/hashes came
+    from the validated listening-test recipe and must match verbatim."""
+
+    def test_anvuew(self) -> None:
+        spec = delyric.MSST_MODELS["anvuew"]
+        assert spec["model_type"] == "bs_roformer"
+        assert spec["ckpt_url"] == (
+            "https://huggingface.co/anvuew/karaoke_bs_roformer/resolve/main/"
+            "karaoke_bs_roformer_anvuew.ckpt"
+        )
+        assert spec["ckpt_sha256"] == (
+            "206d04757cb5f75ca3b55f8a0a48f5c26aa2351d4ff3c7adbfc9affa30ea3ae4"
+        )
+        assert spec["yaml_url"] == (
+            "https://huggingface.co/anvuew/karaoke_bs_roformer/resolve/main/"
+            "karaoke_bs_roformer_anvuew.yaml"
+        )
+        assert spec["yaml_sha256"] == (
+            "5cb3f127ecbc6a8e37f31ea7e05f60f360a44da43e857bde805b7b68558f6338"
+        )
+
+    def test_frazer(self) -> None:
+        spec = delyric.MSST_MODELS["frazer"]
+        assert spec["model_type"] == "bs_roformer"
+        assert spec["ckpt_url"] == (
+            "https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
+            "bs_roformer_karaoke_frazer_becruily.ckpt"
+        )
+        assert spec["ckpt_sha256"] == (
+            "eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9"
+        )
+        assert spec["yaml_url"] == (
+            "https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
+            "config_karaoke_frazer_becruily.yaml"
+        )
+        assert spec["yaml_sha256"] == (
+            "1d3b58b473025183d0d3c91e7a444cb5f1418d9f34e8f46b8d2fb10d2cc8ab34"
+        )
+
+    def test_gabox_v2(self) -> None:
+        spec = delyric.MSST_MODELS["gabox_v2"]
+        assert spec["model_type"] == "mel_band_roformer"
+        assert spec["ckpt_url"] == (
+            "https://github.com/nomadkaraoke/python-audio-separator/releases/download/"
+            "model-configs/mel_band_roformer_karaoke_gabox_v2.ckpt"
+        )
+        assert spec["ckpt_sha256"] == (
+            "ec34be50327aeaf1a996c27977f5c30d1ac80c0076d69683d3e5184c31ea29d3"
+        )
+        assert spec["yaml_url"] == (
+            "https://github.com/nomadkaraoke/python-audio-separator/releases/download/"
+            "model-configs/config_mel_band_roformer_karaoke_gabox.yaml"
+        )
+        assert spec["yaml_sha256"] == (
+            "16b726891076fd0bebab9ce038240b51afb22b04eac6026a7f0356178dcb65b7"
+        )
+
+
+class TestDecodeToWav:
+    """decode_to_wav must ffmpeg-decode audio.webm to a 44.1kHz stereo mix.wav."""
+
+    def test_builds_correct_ffmpeg_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         captured: dict[str, list[str]] = {}
 
         def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
             captured["cmd"] = cmd
-            out_idx = cmd.index("--output_dir") + 1
-            out_dir = Path(cmd[out_idx])
-            (out_dir / "audio_(Vocals)_ensemble.wav").write_bytes(b"")
-            (out_dir / "audio_(Instrumental)_ensemble.wav").write_bytes(b"")
+            Path(cmd[-1]).write_bytes(b"")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(delyric.subprocess, "run", fake_run)
-        monkeypatch.setattr(delyric, "AUDIO_SEPARATOR", "/fake/audio-separator")
+        audio_path = tmp_path / "audio.webm"
+        audio_path.write_bytes(b"fake audio")
+        out_dir = tmp_path / "input"
 
-        with tempfile.TemporaryDirectory(prefix="delyric_test_") as base:
-            base_path = Path(base)
-            song_dir = base_path / "song"
-            song_dir.mkdir()
-            (song_dir / "audio.webm").write_bytes(b"fake audio")
-            out_dir = base_path / "out"
-            out_dir.mkdir()
+        result = delyric.decode_to_wav(audio_path, out_dir)
 
-            separate_song(song_dir, out_dir)
-        return captured["cmd"]
+        assert result == out_dir / "mix.wav"
+        cmd = captured["cmd"]
+        assert cmd[0] == "ffmpeg"
+        assert cmd[cmd.index("-i") + 1] == str(audio_path)
+        assert cmd[cmd.index("-ar") + 1] == "44100"
+        assert cmd[cmd.index("-ac") + 1] == "2"
+        assert cmd[-1] == str(out_dir / "mix.wav")
 
-    def test_includes_all_three_karaoke_models(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_raises_on_ffmpeg_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        cmd = self._run_separate_song(monkeypatch)
-        assert "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt" in cmd
-        assert "mel_band_roformer_karaoke_gabox_v2.ckpt" in cmd
-        assert "mel_band_roformer_karaoke_becruily.ckpt" in cmd
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
 
-    def test_uses_avg_wave_ensemble_algorithm(
-        self, monkeypatch: pytest.MonkeyPatch
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        audio_path = tmp_path / "audio.webm"
+        audio_path.write_bytes(b"fake audio")
+
+        with pytest.raises(RuntimeError, match="ffmpeg decode failed"):
+            delyric.decode_to_wav(audio_path, tmp_path / "input")
+
+
+class TestEncodeToWebm:
+    """encode_to_webm must ffmpeg-encode a WAV to Opus/WebM at 128k."""
+
+    def test_builds_correct_ffmpeg_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        cmd = self._run_separate_song(monkeypatch)
-        idx = cmd.index("--ensemble_algorithm")
-        assert cmd[idx + 1] == "avg_wave"
+        captured: dict[str, list[str]] = {}
 
-    def test_sets_mdxc_overlap_16(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        cmd = self._run_separate_song(monkeypatch)
-        idx = cmd.index("--mdxc_overlap")
-        assert cmd[idx + 1] == "16"
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            Path(cmd[-1]).write_bytes(b"")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    def test_uses_autocast(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        cmd = self._run_separate_song(monkeypatch)
-        assert "--use_autocast" in cmd
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        wav_path = tmp_path / "vocals.wav"
+        wav_path.write_bytes(b"fake wav")
+        out_path = tmp_path / "vocals.webm"
 
-    def test_no_htdemucs_anywhere_in_argv(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        cmd = self._run_separate_song(monkeypatch)
-        assert not any("htdemucs" in str(arg).lower() for arg in cmd)
+        delyric.encode_to_webm(wav_path, out_path)
 
-    def test_primary_model_is_aufr33_viperx(
-        self, monkeypatch: pytest.MonkeyPatch
+        cmd = captured["cmd"]
+        assert cmd[0] == "ffmpeg"
+        assert cmd[cmd.index("-i") + 1] == str(wav_path)
+        assert cmd[cmd.index("-c:a") + 1] == "libopus"
+        assert cmd[cmd.index("-b:a") + 1] == "128k"
+        assert cmd[-1] == str(out_path)
+
+    def test_raises_on_ffmpeg_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The primary --model_filename is the aufr33/viperx checkpoint, not an extra."""
-        cmd = self._run_separate_song(monkeypatch)
-        idx = cmd.index("--model_filename")
-        assert cmd[idx + 1] == "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
 
-    def test_model_file_dir_absent_when_env_unset(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("DELYRIC_MODEL_DIR", raising=False)
-        cmd = self._run_separate_song(monkeypatch)
-        assert "--model_file_dir" not in cmd
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
 
-    def test_model_file_dir_present_when_env_set(
+        with pytest.raises(RuntimeError, match="ffmpeg encode failed"):
+            delyric.encode_to_webm(tmp_path / "in.wav", tmp_path / "out.webm")
+
+
+class TestRunMsstInference:
+    """run_msst_inference must invoke inference.py with the validated flags."""
+
+    def _run(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> tuple[list[str], dict[str, object]]:
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        msst_dir = tmp_path / "msst"
+        model_spec = {
+            "model_type": "bs_roformer",
+            "ckpt": tmp_path / "model.ckpt",
+            "yaml": tmp_path / "model.yaml",
+        }
+        delyric.run_msst_inference(
+            model_spec, msst_dir, tmp_path / "input", tmp_path / "store"
+        )
+        return captured["cmd"], captured["kwargs"]
+
+    def test_command_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        model_dir = tmp_path / "models"
-        monkeypatch.setenv("DELYRIC_MODEL_DIR", str(model_dir))
-        cmd = self._run_separate_song(monkeypatch)
-        idx = cmd.index("--model_file_dir")
-        assert cmd[idx + 1] == str(model_dir)
+        cmd, kwargs = self._run(monkeypatch, tmp_path)
+        assert cmd[0] == sys.executable
+        assert cmd[1] == "inference.py"
+        assert cmd[cmd.index("--model_type") + 1] == "bs_roformer"
+        assert cmd[cmd.index("--config_path") + 1] == str(tmp_path / "model.yaml")
+        assert cmd[cmd.index("--start_check_point") + 1] == str(tmp_path / "model.ckpt")
+        assert cmd[cmd.index("--input_folder") + 1] == str(tmp_path / "input")
+        assert cmd[cmd.index("--store_dir") + 1] == str(tmp_path / "store")
+        assert "--extract_instrumental" in cmd
+        assert "--use_tta" in cmd
+
+    def test_runs_with_msst_dir_as_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _cmd, kwargs = self._run(monkeypatch, tmp_path)
+        assert kwargs["cwd"] == tmp_path / "msst"
+
+    def test_raises_on_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        model_spec = {
+            "model_type": "bs_roformer",
+            "ckpt": tmp_path / "model.ckpt",
+            "yaml": tmp_path / "model.yaml",
+        }
+        with pytest.raises(RuntimeError, match="MSST inference failed"):
+            delyric.run_msst_inference(
+                model_spec, tmp_path / "msst", tmp_path / "input", tmp_path / "store"
+            )
+
+    def test_mel_band_roformer_model_type(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, list[str]] = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        model_spec = {
+            "model_type": "mel_band_roformer",
+            "ckpt": tmp_path / "model.ckpt",
+            "yaml": tmp_path / "model.yaml",
+        }
+        delyric.run_msst_inference(
+            model_spec, tmp_path / "msst", tmp_path / "input", tmp_path / "store"
+        )
+        cmd = captured["cmd"]
+        assert cmd[cmd.index("--model_type") + 1] == "mel_band_roformer"
+
+
+class TestRunEnsemble:
+    """run_ensemble must invoke ensemble.py with avg_wave over the given files."""
+
+    def test_command_construction(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        msst_dir = tmp_path / "msst"
+        files = [tmp_path / "a.wav", tmp_path / "b.wav", tmp_path / "c.wav"]
+        output = tmp_path / "out.wav"
+
+        delyric.run_ensemble(msst_dir, files, output)
+
+        cmd = captured["cmd"]
+        assert cmd[0] == sys.executable
+        assert cmd[1] == "ensemble.py"
+        assert cmd[cmd.index("--type") + 1] == "avg_wave"
+        files_idx = cmd.index("--files")
+        assert cmd[files_idx + 1 : files_idx + 4] == [str(f) for f in files]
+        assert cmd[cmd.index("--output") + 1] == str(output)
+        assert captured["kwargs"]["cwd"] == msst_dir
+
+    def test_raises_on_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError, match="MSST ensemble failed"):
+            delyric.run_ensemble(
+                tmp_path / "msst", [tmp_path / "a.wav"], tmp_path / "out.wav"
+            )
+
+
+class TestSeparateSongOrchestration:
+    """separate_song must decode, run all three real models, then ensemble
+    the results — exercised against the real MSST_MODELS table (with
+    throwaway ckpt/yaml files standing in for the real multi-GB downloads)
+    so this test catches a wrong key/model_type/filename in production data,
+    not just in a synthetic fixture.
+    """
+
+    def _fake_model_paths(self, tmp_path: Path) -> dict:
+        resolved = {}
+        for key, spec in delyric.MSST_MODELS.items():
+            ckpt = tmp_path / "models" / spec["ckpt_filename"]
+            yaml_path = tmp_path / "models" / spec["yaml_filename"]
+            ckpt.parent.mkdir(parents=True, exist_ok=True)
+            ckpt.write_bytes(b"")
+            yaml_path.write_bytes(b"")
+            resolved[key] = {"model_type": spec["model_type"], "ckpt": ckpt, "yaml": yaml_path}
+        return resolved
+
+    def _run_separate_song(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> tuple[list[list[str]], Path, Path]:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            calls.append(cmd)
+            if cmd[1] == "inference.py":
+                store_dir = Path(cmd[cmd.index("--store_dir") + 1])
+                stem_dir = store_dir / "mix"
+                stem_dir.mkdir(parents=True, exist_ok=True)
+                (stem_dir / "instrumental.wav").write_bytes(b"")
+                (stem_dir / "Vocals.wav").write_bytes(b"")
+            elif cmd[1] == "ensemble.py":
+                Path(cmd[cmd.index("--output") + 1]).write_bytes(b"")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        monkeypatch.setattr(delyric, "MSST_DIR", tmp_path / "msst")
+        monkeypatch.setattr(delyric, "MSST_MODEL_PATHS", self._fake_model_paths(tmp_path))
+
+        song_dir = tmp_path / "song"
+        song_dir.mkdir()
+        (song_dir / "audio.webm").write_bytes(b"fake audio")
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        vocals_out, instrumental_out = separate_song(song_dir, work_dir)
+        return calls, vocals_out, instrumental_out
+
+    def test_decodes_audio_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls, _vocals, _instrumental = self._run_separate_song(monkeypatch, tmp_path)
+        decode_calls = [c for c in calls if c[0] == "ffmpeg"]
+        assert len(decode_calls) == 1
+        assert decode_calls[0][decode_calls[0].index("-i") + 1] == str(tmp_path / "song" / "audio.webm")
+
+    def test_runs_inference_for_all_three_real_models(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls, _vocals, _instrumental = self._run_separate_song(monkeypatch, tmp_path)
+        inference_calls = [c for c in calls if c[1] == "inference.py"]
+        assert len(inference_calls) == 3
+        model_types = {c[c.index("--model_type") + 1] for c in inference_calls}
+        assert model_types == {"bs_roformer", "mel_band_roformer"}
+        checkpoints = {c[c.index("--start_check_point") + 1] for c in inference_calls}
+        assert checkpoints == {
+            str(tmp_path / "models" / spec["ckpt_filename"])
+            for spec in delyric.MSST_MODELS.values()
+        }
+
+    def test_runs_two_ensemble_passes_over_three_files_each(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls, _vocals, _instrumental = self._run_separate_song(monkeypatch, tmp_path)
+        ensemble_calls = [c for c in calls if c[1] == "ensemble.py"]
+        assert len(ensemble_calls) == 2
+        for c in ensemble_calls:
+            files_idx = c.index("--files")
+            assert len(c[files_idx + 1 : files_idx + 4]) == 3
+            assert c[c.index("--type") + 1] == "avg_wave"
+
+    def test_ensembles_instrumental_and_vocals_separately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls, _vocals, _instrumental = self._run_separate_song(monkeypatch, tmp_path)
+        ensemble_calls = [c for c in calls if c[1] == "ensemble.py"]
+        instrumental_call = next(
+            c for c in ensemble_calls if "instrumental.wav" in c[c.index("--files") + 1]
+        )
+        vocals_call = next(
+            c for c in ensemble_calls if "Vocals.wav" in c[c.index("--files") + 1]
+        )
+        assert all("instrumental.wav" in f for f in instrumental_call[
+            instrumental_call.index("--files") + 1 : instrumental_call.index("--files") + 4
+        ])
+        assert all("Vocals.wav" in f for f in vocals_call[
+            vocals_call.index("--files") + 1 : vocals_call.index("--files") + 4
+        ])
+
+    def test_returns_vocals_then_instrumental(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _calls, vocals_out, instrumental_out = self._run_separate_song(monkeypatch, tmp_path)
+        assert vocals_out.name == "vocals.wav"
+        assert instrumental_out.name == "instrumental.wav"
+        assert vocals_out.exists()
+        assert instrumental_out.exists()
+
+    def test_raises_when_expected_msst_output_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If MSST doesn't produce the expected stem file (e.g. a config/CLI
+        drift), fail loudly instead of silently ensembling a missing input."""
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            # Deliberately don't create any output files.
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(delyric.subprocess, "run", fake_run)
+        monkeypatch.setattr(delyric, "MSST_DIR", tmp_path / "msst")
+        monkeypatch.setattr(delyric, "MSST_MODEL_PATHS", self._fake_model_paths(tmp_path))
+
+        song_dir = tmp_path / "song"
+        song_dir.mkdir()
+        (song_dir / "audio.webm").write_bytes(b"fake audio")
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match="Expected MSST output"):
+            separate_song(song_dir, work_dir)
 
 
 class TestVerifyCuda:
@@ -278,3 +752,51 @@ class TestVerifyCuda:
         monkeypatch.setattr(delyric.subprocess, "run", fake_run)
 
         verify_cuda()  # should not raise
+
+
+class TestRequirementsDeclareDirectImports:
+    """Every top-level third-party import in delyric.py must be declared in
+    requirements.txt. Previously click/tqdm arrived transitively via
+    audio-separator[gpu]; the MSST rewrite dropped that dependency, so a
+    direct `import click` / `from tqdm import tqdm` now needs a direct
+    requirement, or a fresh venv install will ImportError at startup."""
+
+    @staticmethod
+    def _third_party_imports(source: str) -> set[str]:
+        tree = ast.parse(source)
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.module is not None and node.level == 0:
+                    imported.add(node.module.split(".")[0])
+        return imported - set(sys.stdlib_module_names)
+
+    @staticmethod
+    def _declared_requirements(requirements_text: str) -> set[str]:
+        declared: set[str] = set()
+        for line in requirements_text.splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            name = re.split(r"[<>=\[\s]", line, maxsplit=1)[0].strip()
+            if name:
+                declared.add(name.lower())
+        return declared
+
+    def test_delyric_third_party_imports_are_all_declared(self) -> None:
+        delyric_source = Path(delyric.__file__).read_text(encoding="utf-8")
+        requirements_text = (Path(__file__).parent / "requirements.txt").read_text(
+            encoding="utf-8"
+        )
+
+        third_party = self._third_party_imports(delyric_source)
+        declared = self._declared_requirements(requirements_text)
+
+        missing = {name for name in third_party if name.lower() not in declared}
+        assert not missing, (
+            f"delyric.py imports {sorted(missing)} directly, but "
+            "requirements.txt does not declare them"
+        )

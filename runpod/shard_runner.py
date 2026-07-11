@@ -84,7 +84,8 @@ def process_shard_song(shard_dir: Path, song_name: str) -> bool:
 def main(shard_dir: Path, song_list: Path) -> None:
     """Process every song in SONG_LIST under SHARD_DIR, resuming from any
     already-validated outputs left by a previous (stalled/terminated) pod."""
-    delyric.AUDIO_SEPARATOR = delyric.resolve_audio_separator()
+    delyric.MSST_DIR = delyric.resolve_msst_dir()
+    delyric.MSST_MODEL_PATHS = delyric.ensure_msst_models(delyric.resolve_model_dir())
     delyric.verify_cuda()
 
     songs = read_song_list(song_list)

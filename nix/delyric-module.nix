@@ -15,7 +15,7 @@
 #
 # Service binds 0.0.0.0:9001 by default — the sound-stage server calls it
 # over the LAN. The underlying package (nix/delyric-worker.nix) bootstraps a
-# Python venv (audio-separator[gpu], torch, …) into StateDirectory on first
+# Python venv (torch, MSST inference deps, …) into StateDirectory on first
 # start; that first start can take a long time (multi-GB downloads) and
 # needs outbound network and a writable state dir.
 {
@@ -88,10 +88,13 @@ in {
         # subdirectory, so the "delyric-worker" name below must match
         # StateDirectory= exactly.
         DELYRIC_STATE_DIR = "%S/delyric-worker";
-        # audio-separator downloads ~2.5GB of model checkpoints and defaults
-        # to /tmp/audio-separator-models; PrivateTmp=true wipes /tmp on every
-        # restart, which would re-download that on every restart without a
-        # persistent location. Point it at StateDirectory instead.
+        # delyric.py's ensure_msst_models() downloads ~3.3GB of MSST ensemble
+        # checkpoints/configs here, sha256-verifying each one, and has no
+        # baked-in cache location of its own (unlike audio-separator's old
+        # model registry) — the value must be set explicitly.
+        # PrivateTmp=true wipes /tmp on every restart, which would
+        # re-download that on every restart without a persistent location.
+        # Point it at StateDirectory instead.
         DELYRIC_MODEL_DIR = "%S/delyric-worker/models";
         # The service user has no home directory; the first-run pip
         # bootstrap and torch write to ~/.cache. An unset/unwritable HOME
@@ -108,9 +111,9 @@ in {
         # Longer than a typical service's RestartSec: a crash-loop here would
         # otherwise re-trigger the multi-GB venv bootstrap repeatedly.
         RestartSec = "30s";
-        # The wrapper bootstraps a multi-GB pip venv (torch, audio-separator)
-        # on first run and only binds the port once that completes — the
-        # default TimeoutStartSec would kill it mid-install.
+        # The wrapper bootstraps a multi-GB pip venv (torch, MSST inference
+        # deps) on first run and only binds the port once that completes —
+        # the default TimeoutStartSec would kill it mid-install.
         TimeoutStartSec = "infinity";
 
         StateDirectory = "delyric-worker";

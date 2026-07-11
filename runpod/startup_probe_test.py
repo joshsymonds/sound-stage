@@ -1,8 +1,9 @@
 """Tests for runpod/startup_probe.py — startup GPU probe.
 
-delyric.verify_cuda / resolve_audio_separator / separate_song are mocked
-(matching test_delyric.py's style); these tests exercise the probe's own
-timing/threshold and error-propagation logic, not real GPU inference.
+delyric.verify_cuda / resolve_msst_dir / ensure_msst_models / separate_song
+are mocked (matching test_delyric.py's style); these tests exercise the
+probe's own timing/threshold and error-propagation logic, not real GPU
+inference.
 """
 
 from pathlib import Path
@@ -26,14 +27,18 @@ class TestRunProbe:
     def test_passes_when_separation_completes_under_threshold(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
         monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
         monkeypatch.setattr(delyric, "separate_song", lambda song_dir, tmp: (Path("v"), Path("i")))
 
         startup_probe.run_probe(timeout_seconds=120)  # should not raise
 
     def test_raises_when_verify_cuda_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
 
         def boom() -> None:
             raise RuntimeError("CUDA is not available")
@@ -43,21 +48,37 @@ class TestRunProbe:
         with pytest.raises(RuntimeError, match="CUDA"):
             startup_probe.run_probe(timeout_seconds=120)
 
-    def test_raises_when_resolve_audio_separator_fails(
+    def test_raises_when_resolve_msst_dir_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def boom() -> str:
-            raise RuntimeError("audio-separator not found on PATH")
+        def boom() -> Path:
+            raise RuntimeError("DELYRIC_MSST_DIR is not set")
 
-        monkeypatch.setattr(delyric, "resolve_audio_separator", boom)
+        monkeypatch.setattr(delyric, "resolve_msst_dir", boom)
 
-        with pytest.raises(RuntimeError, match="audio-separator"):
+        with pytest.raises(RuntimeError, match="DELYRIC_MSST_DIR"):
+            startup_probe.run_probe(timeout_seconds=120)
+
+    def test_raises_when_ensure_msst_models_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+
+        def boom(_model_dir: Path) -> dict:
+            raise RuntimeError("sha256 mismatch")
+
+        monkeypatch.setattr(delyric, "ensure_msst_models", boom)
+
+        with pytest.raises(RuntimeError, match="sha256"):
             startup_probe.run_probe(timeout_seconds=120)
 
     def test_raises_when_separation_exceeds_threshold(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
         monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
 
         times = iter([0.0, 200.0])  # start, end -> 200s elapsed
@@ -68,7 +89,9 @@ class TestRunProbe:
             startup_probe.run_probe(timeout_seconds=120)
 
     def test_raises_when_separation_itself_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
         monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
 
         def boom(song_dir: Path, tmp: Path) -> tuple[Path, Path]:
@@ -85,7 +108,9 @@ class TestRunProbe:
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
         monkeypatch.setattr(startup_probe, "TEST_CLIP_DIR", empty_dir)
-        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
         monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
 
         with pytest.raises(RuntimeError, match="test clip"):

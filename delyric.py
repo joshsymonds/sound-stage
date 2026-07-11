@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Delyric — Vocal separation pipeline for UltraStar karaoke songs.
 
-Uses audio-separator with a 3-model karaoke MelBand Roformer ensemble
-(aufr33/viperx + gabox v2 + becruily, avg_wave) to remove lead vocals while
-keeping backing vocals, producing instrumental and vocal tracks from
-existing audio.webm files.
+Runs the validated 3-model karaoke ensemble — anvuew + frazer/becruily
+BS-Roformer, plus gabox_v2 Mel-Band Roformer, averaged with avg_wave and
+test-time augmentation — via ZFTurbo's Music-Source-Separation-Training
+(MSST) `inference.py`/`ensemble.py` CLIs, invoked as subprocesses, to remove
+lead vocals while keeping backing vocals, producing instrumental and vocal
+tracks from existing audio.webm files.
 """
 
 import concurrent.futures
+import hashlib
 import logging
 import os
 import re
@@ -15,49 +18,78 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
 
 import click
 from tqdm import tqdm
 
-# Model constants — update these when better checkpoints are released.
-#
-# This is audio-separator's built-in `karaoke` ensemble preset (3-model MelBand
-# Roformer, avg_wave — see `audio-separator --list_presets` /
-# ensemble_presets.json), reproduced explicitly to match this file's existing
-# --model_filename/--extra_models/--ensemble_algorithm style rather than the
-# newer --ensemble_preset shortcut.
-#
-# anvuew's karaoke_bs_roformer checkpoint scores higher on the MVSEP lead/back
-# separation leaderboard than aufr33_viperx and was the first choice for the
-# primary slot, but it is NOT in audio-separator's model registry — only
-# anvuew's De-Reverb checkpoints are. audio-separator 0.44.3's CLI has no path
-# to load an unlisted checkpoint even if the file is already sitting in
-# --model_file_dir: Separator.download_model_files() unconditionally looks the
-# requested filename up in its bundled registry before ever touching local
-# disk, and raises `ValueError: Model file <name> not found in supported model
-# files` when it isn't there (confirmed by downloading the real checkpoint
-# from HuggingFace and pointing --model_file_dir at it — same error). Next
-# time a model bump is considered, re-check whether audio-separator has added
-# an anvuew karaoke entry to its registry before assuming this trio is final.
-#
-# No htdemucs model — that task removes backing vocals along with the lead,
-# which defeats the point of a karaoke ensemble.
-PRIMARY_MODEL = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
-ENSEMBLE_EXTRA_MODELS = [
-    "mel_band_roformer_karaoke_gabox_v2.ckpt",
-    "mel_band_roformer_karaoke_becruily.ckpt",
-]
+# Model constants — the validated 3-model karaoke ensemble (BS-Roformer x2 +
+# Mel-Band Roformer, avg_wave, TTA) chosen after an A/B listening test
+# rejected the earlier audio-separator-based ensemble. All three checkpoints
+# are loaded directly via MSST's inference.py rather than audio-separator's
+# model registry — audio-separator 0.44.3 could not load anvuew's
+# karaoke_bs_roformer checkpoint at all (Separator.download_model_files()
+# only resolves registry-listed filenames, even when the file is already
+# present via --model_file_dir), which is why this engine replaced it
+# outright.
+MSST_MODELS = {
+    "anvuew": {
+        "model_type": "bs_roformer",
+        "ckpt_filename": "karaoke_bs_roformer_anvuew.ckpt",
+        "ckpt_url": (
+            "https://huggingface.co/anvuew/karaoke_bs_roformer/resolve/main/"
+            "karaoke_bs_roformer_anvuew.ckpt"
+        ),
+        "ckpt_sha256": "206d04757cb5f75ca3b55f8a0a48f5c26aa2351d4ff3c7adbfc9affa30ea3ae4",
+        "yaml_filename": "karaoke_bs_roformer_anvuew.yaml",
+        "yaml_url": (
+            "https://huggingface.co/anvuew/karaoke_bs_roformer/resolve/main/"
+            "karaoke_bs_roformer_anvuew.yaml"
+        ),
+        "yaml_sha256": "5cb3f127ecbc6a8e37f31ea7e05f60f360a44da43e857bde805b7b68558f6338",
+    },
+    "frazer": {
+        "model_type": "bs_roformer",
+        "ckpt_filename": "bs_roformer_karaoke_frazer_becruily.ckpt",
+        "ckpt_url": (
+            "https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
+            "bs_roformer_karaoke_frazer_becruily.ckpt"
+        ),
+        "ckpt_sha256": "eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9",
+        "yaml_filename": "config_karaoke_frazer_becruily.yaml",
+        "yaml_url": (
+            "https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
+            "config_karaoke_frazer_becruily.yaml"
+        ),
+        "yaml_sha256": "1d3b58b473025183d0d3c91e7a444cb5f1418d9f34e8f46b8d2fb10d2cc8ab34",
+    },
+    "gabox_v2": {
+        "model_type": "mel_band_roformer",
+        "ckpt_filename": "mel_band_roformer_karaoke_gabox_v2.ckpt",
+        "ckpt_url": (
+            "https://github.com/nomadkaraoke/python-audio-separator/releases/download/"
+            "model-configs/mel_band_roformer_karaoke_gabox_v2.ckpt"
+        ),
+        "ckpt_sha256": "ec34be50327aeaf1a996c27977f5c30d1ac80c0076d69683d3e5184c31ea29d3",
+        "yaml_filename": "config_mel_band_roformer_karaoke_gabox.yaml",
+        "yaml_url": (
+            "https://github.com/nomadkaraoke/python-audio-separator/releases/download/"
+            "model-configs/config_mel_band_roformer_karaoke_gabox.yaml"
+        ),
+        "yaml_sha256": "16b726891076fd0bebab9ce038240b51afb22b04eac6026a7f0356178dcb65b7",
+    },
+}
 ENSEMBLE_ALGORITHM = "avg_wave"
-MDXC_OVERLAP = "16"
 
 DEFAULT_LIBRARY = "/mnt/music/sound-stage"
 OPUS_BITRATE = "128k"
 
 LOG_FILENAME = "delyric-errors.log"
 
-SEPARATOR_TIMEOUT = 1800  # 30 minutes per song — headroom for the 3-model ensemble at mdxc_overlap 16
-FFMPEG_TIMEOUT = 120  # 2 minutes per encode
+MSST_INFERENCE_TIMEOUT = 1800  # 30 minutes per model — headroom for TTA (~3x runtime)
+MSST_ENSEMBLE_TIMEOUT = 300  # 5 minutes — simple waveform averaging of already-separated stems
+FFMPEG_TIMEOUT = 120  # 2 minutes per decode/encode
 
 # Abort after this many consecutive failures — catches environmental breakage
 # (e.g. a Nix GC that deletes the venv's python mid-run) before it silently
@@ -81,40 +113,123 @@ def is_processed(song_dir: Path) -> bool:
     return (song_dir / "instrumental.webm").exists() and (song_dir / "vocals.webm").exists()
 
 
-def resolve_audio_separator() -> str:
-    """Resolve audio-separator to an absolute path and verify it actually runs.
+def resolve_msst_dir() -> Path:
+    """Resolve the MSST checkout providing inference.py/ensemble.py, and verify it.
 
-    A bare `audio-separator` subprocess call will fail with FileNotFoundError not
-    only when the binary is missing but also when its shebang target has been
-    garbage-collected out of the Nix store — the failure is instant, so a long
-    run can silently churn through thousands of songs logging identical errors.
-    Resolve at startup and probe with --help so we detect breakage loudly
-    before processing begins. --help is used instead of a feature-specific
-    flag because it's universal and only verifies the interpreter can start.
+    DELYRIC_MSST_DIR is exported by nix/wrapper.sh, pointing at the pinned
+    fetchFromGitHub store path baked into the delyric-worker package (see
+    nix/delyric-worker.nix) — build-time immutable, no runtime bootstrap
+    needed. Required and verified eagerly, mirroring the old
+    resolve_audio_separator's fail-loud-at-startup shape: a bad/missing MSST
+    checkout would otherwise fail deep into the first song's subprocess call.
     """
-    path = shutil.which("audio-separator")
-    if path is None:
+    raw = os.environ.get("DELYRIC_MSST_DIR")
+    if not raw:
         raise RuntimeError(
-            "audio-separator not found on PATH. Enter the devenv shell "
-            "(direnv allow / devenv shell) to rebuild the venv."
+            "DELYRIC_MSST_DIR is not set. It must point at a pinned "
+            "Music-Source-Separation-Training checkout (see "
+            "nix/delyric-worker.nix, exported by nix/wrapper.sh)."
         )
-    try:
-        subprocess.run(
-            [path, "--help"],
-            capture_output=True,
-            check=True,
-            timeout=30,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+    msst_dir = Path(raw)
+    if not (msst_dir / "inference.py").exists():
         raise RuntimeError(
-            f"audio-separator at {path} is broken (likely a GC'd Nix store "
-            f"dependency). Delete .devenv/state/delyric-venv and re-enter "
-            f"the devenv shell to rebuild. Underlying error: {exc}"
-        ) from exc
-    return path
+            f"DELYRIC_MSST_DIR={msst_dir} has no inference.py — not a valid "
+            "Music-Source-Separation-Training checkout."
+        )
+    return msst_dir
 
 
-AUDIO_SEPARATOR = None  # Populated at startup by main() before any processing.
+def resolve_model_dir() -> Path:
+    """Resolve the directory MSST checkpoints/configs are downloaded into.
+
+    Unlike audio-separator, MSST has no baked-in model registry/cache to
+    fall back to — this is required, with no default, so a misconfigured
+    deployment fails loudly instead of downloading checkpoints somewhere
+    unexpected (or silently missing them).
+    """
+    raw = os.environ.get("DELYRIC_MODEL_DIR")
+    if not raw:
+        raise RuntimeError(
+            "DELYRIC_MODEL_DIR is not set. MSST checkpoints have no baked-in "
+            "cache location (unlike audio-separator's model registry) — set "
+            "it to a writable directory for the ensemble's checkpoints and "
+            "configs."
+        )
+    return Path(raw)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_file(url: str, dest: Path) -> None:
+    """Thin wrapper around urlretrieve so tests can mock network access."""
+    urllib.request.urlretrieve(url, dest)
+
+
+def _ensure_model_file(model_dir: Path, filename: str, url: str, expected_sha256: str) -> Path:
+    """Download `filename` into model_dir if missing, verifying its sha256.
+
+    A checksum mismatch — whether on an already-present file or a fresh
+    download — raises immediately rather than silently proceeding with a
+    corrupt or tampered model file, mirroring the "fail loudly instead of
+    quietly running broken" philosophy used elsewhere in this file.
+    """
+    dest = model_dir / filename
+    if dest.exists():
+        actual = _sha256_file(dest)
+        if actual == expected_sha256:
+            return dest
+        raise RuntimeError(
+            f"{dest} exists but its sha256 does not match the pinned checksum "
+            f"(expected {expected_sha256}, got {actual}) — delete it and "
+            "retry rather than risk running against a corrupted or tampered "
+            "model file."
+        )
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dest = dest.with_name(dest.name + ".part")
+    logger.info("Downloading %s from %s", filename, url)
+    _download_file(url, tmp_dest)
+
+    actual = _sha256_file(tmp_dest)
+    if actual != expected_sha256:
+        tmp_dest.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Downloaded {filename} from {url} but its sha256 does not "
+            f"match the pinned checksum (expected {expected_sha256}, got "
+            f"{actual}) — refusing to use a corrupted or tampered download."
+        )
+    tmp_dest.rename(dest)
+    return dest
+
+
+def ensure_msst_models(model_dir: Path) -> dict[str, dict[str, object]]:
+    """Ensure every MSST ensemble model's checkpoint+config exist locally,
+    downloading and sha256-verifying any that are missing.
+
+    Returns a dict keyed by MSST_MODELS' keys, each holding "model_type",
+    "ckpt", and "yaml" (resolved local Paths) — the shape consumed by
+    run_msst_inference.
+    """
+    resolved: dict[str, dict[str, object]] = {}
+    for key, spec in MSST_MODELS.items():
+        ckpt_path = _ensure_model_file(
+            model_dir, spec["ckpt_filename"], spec["ckpt_url"], spec["ckpt_sha256"]
+        )
+        yaml_path = _ensure_model_file(
+            model_dir, spec["yaml_filename"], spec["yaml_url"], spec["yaml_sha256"]
+        )
+        resolved[key] = {"model_type": spec["model_type"], "ckpt": ckpt_path, "yaml": yaml_path}
+    return resolved
+
+
+MSST_DIR = None  # Populated at startup by main()/the worker lifespan before any processing.
+MSST_MODEL_PATHS = None  # ditto — see ensure_msst_models.
 
 
 def verify_cuda() -> None:
@@ -124,7 +239,7 @@ def verify_cuda() -> None:
     wheels mismatch — the separation still runs, just ~100x slower, with no
     error. On a queue of any real size that silent fallback burns days before
     anyone notices. Fail loudly here instead, using the same "probe at
-    startup" shape as resolve_audio_separator above.
+    startup" shape as resolve_msst_dir/ensure_msst_models above.
 
     Probes with sys.executable rather than resolving "python3" off PATH:
     nix/wrapper.sh execs the venv's python directly without ever adding its
@@ -159,56 +274,66 @@ def verify_cuda() -> None:
         )
 
 
-def separate_song(song_dir: Path, tmpdir: Path) -> tuple[Path, Path]:
-    """Run ensemble separation on audio.webm, return paths to vocals and instrumental WAVs."""
-    audio_path = song_dir / "audio.webm"
-
+def decode_to_wav(audio_path: Path, out_dir: Path) -> Path:
+    """ffmpeg-decode audio.webm to a 44.1kHz stereo mix.wav for MSST input."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    wav_path = out_dir / "mix.wav"
     cmd = [
-        AUDIO_SEPARATOR,
-        str(audio_path),
-        "--model_filename", PRIMARY_MODEL,
-        "--extra_models", *ENSEMBLE_EXTRA_MODELS,
-        "--ensemble_algorithm", ENSEMBLE_ALGORITHM,
-        "--mdxc_overlap", MDXC_OVERLAP,
-        "--use_autocast",
-        "--output_dir", str(tmpdir),
-        "--output_format", "WAV",
+        "ffmpeg", "-y",
+        "-i", str(audio_path),
+        "-ar", "44100",
+        "-ac", "2",
+        str(wav_path),
     ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=FFMPEG_TIMEOUT)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg decode failed:\n{result.stderr}")
+    return wav_path
 
-    # DELYRIC_MODEL_DIR overrides audio-separator's own model cache directory.
-    # Under the hardened systemd unit, PrivateTmp wipes the default /tmp cache
-    # on every restart; the unit points this at its persistent StateDirectory
-    # instead. Unset, audio-separator falls back to its own baked-in default —
-    # no need to duplicate that default here.
-    model_dir = os.environ.get("DELYRIC_MODEL_DIR")
-    if model_dir:
-        cmd += ["--model_file_dir", model_dir]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SEPARATOR_TIMEOUT)
+def run_msst_inference(
+    model_spec: dict[str, object], msst_dir: Path, input_dir: Path, store_dir: Path
+) -> None:
+    """Run MSST's inference.py for a single ensemble model.
+
+    Writes {store_dir}/{input stem}/Vocals.wav and .../instrumental.wav (the
+    stem name comes from the model's config — all three ensemble models
+    target "Vocals", confirmed against their yaml configs).
+    """
+    cmd = [
+        sys.executable, "inference.py",
+        "--model_type", model_spec["model_type"],
+        "--config_path", str(model_spec["yaml"]),
+        "--start_check_point", str(model_spec["ckpt"]),
+        "--input_folder", str(input_dir),
+        "--store_dir", str(store_dir),
+        "--extract_instrumental",
+        "--use_tta",
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, timeout=MSST_INFERENCE_TIMEOUT, cwd=msst_dir
+    )
     if result.returncode != 0:
         raise RuntimeError(
-            f"audio-separator failed (exit {result.returncode}):\n{result.stderr}"
+            f"MSST inference failed (exit {result.returncode}):\n{result.stderr}"
         )
 
-    # audio-separator outputs files named like:
-    # audio_(Vocals)_<model_slug>.wav and audio_(Instrumental)_<model_slug>.wav
-    vocals_path = None
-    instrumental_path = None
-    for f in tmpdir.iterdir():
-        if f.suffix != ".wav":
-            continue
-        if "(Vocals)" in f.name:
-            vocals_path = f
-        elif "(Instrumental)" in f.name:
-            instrumental_path = f
 
-    if vocals_path is None or instrumental_path is None:
-        found = [f.name for f in tmpdir.iterdir()]
+def run_ensemble(msst_dir: Path, files: list[Path], output_path: Path) -> None:
+    """Run MSST's ensemble.py to average several stem WAVs with avg_wave."""
+    cmd = [
+        sys.executable, "ensemble.py",
+        "--type", ENSEMBLE_ALGORITHM,
+        "--files", *[str(f) for f in files],
+        "--output", str(output_path),
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, timeout=MSST_ENSEMBLE_TIMEOUT, cwd=msst_dir
+    )
+    if result.returncode != 0:
         raise RuntimeError(
-            f"Expected vocals and instrumental WAVs in {tmpdir}, found: {found}"
+            f"MSST ensemble failed (exit {result.returncode}):\n{result.stderr}"
         )
-
-    return vocals_path, instrumental_path
 
 
 def encode_to_webm(wav_path: Path, output_path: Path) -> None:
@@ -223,6 +348,38 @@ def encode_to_webm(wav_path: Path, output_path: Path) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=FFMPEG_TIMEOUT)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg encode failed:\n{result.stderr}")
+
+
+def _expect_file(path: Path) -> Path:
+    """Fail loudly if an expected MSST/ensemble output is missing, instead of
+    letting a later step (e.g. ensembling) fail on a confusing FileNotFoundError."""
+    if not path.exists():
+        raise RuntimeError(f"Expected MSST output at {path}, but it does not exist.")
+    return path
+
+
+def separate_song(song_dir: Path, tmpdir: Path) -> tuple[Path, Path]:
+    """Run the MSST 3-model ensemble on audio.webm, return (vocals_wav, instrumental_wav)."""
+    audio_path = song_dir / "audio.webm"
+
+    input_dir = tmpdir / "input"
+    mix_wav = decode_to_wav(audio_path, input_dir)
+
+    instrumental_paths = []
+    vocals_paths = []
+    for key, spec in MSST_MODEL_PATHS.items():
+        store_dir = tmpdir / f"out-{key}"
+        run_msst_inference(spec, MSST_DIR, input_dir, store_dir)
+        stem_dir = store_dir / mix_wav.stem
+        instrumental_paths.append(_expect_file(stem_dir / "instrumental.wav"))
+        vocals_paths.append(_expect_file(stem_dir / "Vocals.wav"))
+
+    instrumental_out = tmpdir / "instrumental.wav"
+    vocals_out = tmpdir / "vocals.wav"
+    run_ensemble(MSST_DIR, instrumental_paths, instrumental_out)
+    run_ensemble(MSST_DIR, vocals_paths, vocals_out)
+
+    return vocals_out, instrumental_out
 
 
 def update_song_txt(song_dir: Path) -> None:
@@ -303,7 +460,8 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, l
     """Separate vocals from instrumentals in UltraStar karaoke songs.
 
     Processes songs in LIBRARY_DIR (default: /mnt/music/sound-stage/) using
-    a 3-model karaoke MelBand Roformer ensemble (avg_wave).
+    the validated MSST BS-Roformer/Mel-Band-Roformer 3-model ensemble
+    (avg_wave, TTA).
     """
     # Set up error logging
     log_path = library_dir / LOG_FILENAME
@@ -348,11 +506,13 @@ def main(library_dir: Path, dry_run: bool, song_name: str | None, force: bool, l
                 click.echo(f"  {s.name}")
         return
 
-    # Resolve and probe audio-separator and CUDA BEFORE touching any songs — if
-    # the venv is broken, or GPU inference would silently fall back to CPU, we
-    # want to know now, not 1000 failures (or days of CPU-speed runs) later.
-    global AUDIO_SEPARATOR
-    AUDIO_SEPARATOR = resolve_audio_separator()
+    # Resolve the MSST checkout and models, and probe CUDA BEFORE touching any
+    # songs — if the checkout is broken, models fail to verify, or GPU
+    # inference would silently fall back to CPU, we want to know now, not
+    # 1000 failures (or days of CPU-speed runs) later.
+    global MSST_DIR, MSST_MODEL_PATHS
+    MSST_DIR = resolve_msst_dir()
+    MSST_MODEL_PATHS = ensure_msst_models(resolve_model_dir())
     verify_cuda()
 
     click.echo(f"Processing {to_process} songs ({skipped} already done)")

@@ -1,6 +1,6 @@
 #!@bash@/bin/bash
-# Wrapper that bootstraps a Python venv for audio-separator[gpu] on first run
-# and execs the delyric FastAPI worker.
+# Wrapper that bootstraps a Python venv for the MSST inference deps on first
+# run and execs the delyric FastAPI worker.
 set -euo pipefail
 
 SRC_DIR="@srcDir@"
@@ -8,6 +8,7 @@ PYTHON="@python@"
 FFMPEG_BIN="@ffmpegBin@"
 NATIVE_LIBS="@nativeLibs@"
 BUILD_TOOLS="@buildToolsBin@"
+MSST_DIR="@msstDir@"
 
 : "${DELYRIC_STATE_DIR:?DELYRIC_STATE_DIR must be set (systemd StateDirectory)}"
 
@@ -41,10 +42,12 @@ if [ "${needs_install}" = "1" ]; then
 fi
 
 export LD_LIBRARY_PATH="${NATIVE_LIBS}:/run/opengl-driver/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-# Prepend the venv's bin/ so resolve_audio_separator's shutil.which() finds
-# audio-separator under systemd, which execs python directly and never
-# otherwise puts the venv on PATH.
 export PATH="${VENV}/bin:${FFMPEG_BIN}:${PATH:-}"
+
+# Immutable, pinned MSST checkout (see nix/delyric-worker.nix) — delyric.py's
+# resolve_msst_dir() requires this and fails loudly if it's unset or doesn't
+# look like a real checkout.
+export DELYRIC_MSST_DIR="${MSST_DIR}"
 
 cd "${SRC_DIR}"
 exec "${VENV}/bin/python" "${SRC_DIR}/delyric_worker.py"

@@ -18,29 +18,34 @@ def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
 
     dw._reset_for_tests()
     assert dw._worker_thread is None
-    # AUDIO_SEPARATOR is a module global the lifespan assigns directly (not via
-    # monkeypatch), so it can leak across tests unless reset here too.
-    delyric.AUDIO_SEPARATOR = None
+    # MSST_DIR/MSST_MODEL_PATHS are module globals the lifespan assigns
+    # directly (not via monkeypatch), so they can leak across tests unless
+    # reset here too.
+    delyric.MSST_DIR = None
+    delyric.MSST_MODEL_PATHS = None
     yield tmp_path
     dw._reset_for_tests()
-    delyric.AUDIO_SEPARATOR = None
+    delyric.MSST_DIR = None
+    delyric.MSST_MODEL_PATHS = None
 
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Yield a TestClient with lifespan events active (worker thread running).
 
-    The CUDA and audio-separator startup probes are mocked to succeed by
-    default here — this machine may lack a GPU or the venv's audio-separator
-    binary, so a real probe would fail startup for every test using this
-    fixture. TestCudaStartupProbe and TestAudioSeparatorStartupProbe below
-    exercise the real wiring by overriding these mocks.
+    The CUDA and MSST startup probes are mocked to succeed by default here —
+    this machine may lack a GPU or a real MSST checkout/model cache, so a
+    real probe would fail startup for every test using this fixture.
+    TestCudaStartupProbe and TestMsstStartupProbe below exercise the real
+    wiring by overriding these mocks.
     """
     import delyric
     import delyric_worker as dw
 
     monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
-    monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/fake/audio-separator")
+    monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+    monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
+    monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
     with TestClient(dw.app) as c:
         yield c
 
@@ -238,6 +243,9 @@ class TestCudaStartupProbe:
         import delyric_worker as dw
 
         calls = []
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
         monkeypatch.setattr(delyric, "verify_cuda", lambda: calls.append(True))
         with TestClient(dw.app):
             pass
@@ -249,6 +257,10 @@ class TestCudaStartupProbe:
         import delyric
         import delyric_worker as dw
 
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
+
         def boom() -> None:
             raise RuntimeError("CUDA is not available to this venv's PyTorch build")
 
@@ -258,27 +270,32 @@ class TestCudaStartupProbe:
                 pass
 
 
-class TestAudioSeparatorStartupProbe:
-    """Lifespan startup must resolve delyric.AUDIO_SEPARATOR itself.
+class TestMsstStartupProbe:
+    """Lifespan startup must resolve delyric.MSST_DIR/MSST_MODEL_PATHS itself.
 
     process_song only runs via the CLI's main() in the reference flow, which
-    populates AUDIO_SEPARATOR before processing; the worker calls process_song
-    directly and skips main() entirely, so without this the global stays None
-    and separate_song builds its command with None as argv[0].
+    populates these before processing; the worker calls process_song
+    directly and skips main() entirely, so without this the globals stay
+    None and separate_song fails confusingly instead of via a clear startup error.
     """
 
-    def test_lifespan_populates_audio_separator(
+    def test_lifespan_populates_msst_dir_and_models(
         self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import delyric
         import delyric_worker as dw
 
         monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
-        monkeypatch.setattr(delyric, "resolve_audio_separator", lambda: "/sentinel/audio-separator")
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/sentinel/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/sentinel/models"))
+        monkeypatch.setattr(
+            delyric, "ensure_msst_models", lambda model_dir: {"sentinel": {"model_dir": model_dir}}
+        )
         with TestClient(dw.app):
-            assert delyric.AUDIO_SEPARATOR == "/sentinel/audio-separator"
+            assert delyric.MSST_DIR == Path("/sentinel/msst")
+            assert delyric.MSST_MODEL_PATHS == {"sentinel": {"model_dir": Path("/sentinel/models")}}
 
-    def test_lifespan_fails_fast_when_audio_separator_missing(
+    def test_lifespan_fails_fast_when_msst_dir_missing(
         self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import delyric
@@ -286,11 +303,29 @@ class TestAudioSeparatorStartupProbe:
 
         monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
 
-        def boom() -> str:
-            raise RuntimeError("audio-separator not found on PATH")
+        def boom() -> Path:
+            raise RuntimeError("DELYRIC_MSST_DIR is not set")
 
-        monkeypatch.setattr(delyric, "resolve_audio_separator", boom)
-        with pytest.raises(RuntimeError, match="audio-separator"):
+        monkeypatch.setattr(delyric, "resolve_msst_dir", boom)
+        with pytest.raises(RuntimeError, match="DELYRIC_MSST_DIR"):
+            with TestClient(dw.app):
+                pass
+
+    def test_lifespan_fails_fast_when_model_ensure_fails(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/sentinel/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/sentinel/models"))
+
+        def boom(_model_dir: Path) -> dict:
+            raise RuntimeError("sha256 mismatch")
+
+        monkeypatch.setattr(delyric, "ensure_msst_models", boom)
+        with pytest.raises(RuntimeError, match="sha256"):
             with TestClient(dw.app):
                 pass
 

@@ -28,7 +28,8 @@ DEFAULT_PROBE_TIMEOUT_SECONDS = 120.0
 
 def run_probe(timeout_seconds: float = DEFAULT_PROBE_TIMEOUT_SECONDS) -> None:
     """Run the startup probe. Raises RuntimeError on any failure."""
-    delyric.AUDIO_SEPARATOR = delyric.resolve_audio_separator()
+    delyric.MSST_DIR = delyric.resolve_msst_dir()
+    delyric.MSST_MODEL_PATHS = delyric.ensure_msst_models(delyric.resolve_model_dir())
     delyric.verify_cuda()
 
     clip_path = TEST_CLIP_DIR / "audio.webm"
