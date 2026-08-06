@@ -5,7 +5,7 @@ set dotenv-load := true
 set dotenv-filename := ".env.local"
 
 # Run all tests
-test:
+test: build-web
     go test -race $(go list ./... | grep -v /web/)
     pytest -q
 
@@ -92,7 +92,13 @@ fmt-web:
 
 # Build web for production
 build-web:
-    cd web && npm run build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd web
+    if [ ! -d node_modules ]; then
+      npm ci
+    fi
+    npm run build
 
 # Screenshot stories (requires storybook running on :6006)
 screenshot *ARGS:

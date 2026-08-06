@@ -13,19 +13,39 @@ from fastapi.testclient import TestClient
 def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Reset module-level state and point DELYRIC_LIBRARY at an isolated tmp dir."""
     monkeypatch.setenv("DELYRIC_LIBRARY", str(tmp_path))
+    import delyric
     import delyric_worker as dw
 
     dw._reset_for_tests()
     assert dw._worker_thread is None
+    # MSST_DIR/MSST_MODEL_PATHS are module globals the lifespan assigns
+    # directly (not via monkeypatch), so they can leak across tests unless
+    # reset here too.
+    delyric.MSST_DIR = None
+    delyric.MSST_MODEL_PATHS = None
     yield tmp_path
     dw._reset_for_tests()
+    delyric.MSST_DIR = None
+    delyric.MSST_MODEL_PATHS = None
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    """Yield a TestClient with lifespan events active (worker thread running)."""
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """Yield a TestClient with lifespan events active (worker thread running).
+
+    The CUDA and MSST startup probes are mocked to succeed by default here —
+    this machine may lack a GPU or a real MSST checkout/model cache, so a
+    real probe would fail startup for every test using this fixture.
+    TestCudaStartupProbe and TestMsstStartupProbe below exercise the real
+    wiring by overriding these mocks.
+    """
+    import delyric
     import delyric_worker as dw
 
+    monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+    monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+    monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
+    monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
     with TestClient(dw.app) as c:
         yield c
 
@@ -210,6 +230,104 @@ class TestSerialQueue:
             assert final["status"] == "complete", final
 
         assert state["max"] == 1, f"expected strict serial execution, saw max concurrent={state['max']}"
+
+
+class TestCudaStartupProbe:
+    """Lifespan startup must call delyric.verify_cuda() so the service fails
+    fast under systemd rather than silently falling back to CPU."""
+
+    def test_lifespan_calls_verify_cuda(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        calls = []
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: calls.append(True))
+        with TestClient(dw.app):
+            pass
+        assert calls == [True]
+
+    def test_lifespan_fails_fast_when_cuda_unavailable(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/fake/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/fake/models"))
+        monkeypatch.setattr(delyric, "ensure_msst_models", lambda _model_dir: {})
+
+        def boom() -> None:
+            raise RuntimeError("CUDA is not available to this venv's PyTorch build")
+
+        monkeypatch.setattr(delyric, "verify_cuda", boom)
+        with pytest.raises(RuntimeError, match="CUDA"):
+            with TestClient(dw.app):
+                pass
+
+
+class TestMsstStartupProbe:
+    """Lifespan startup must resolve delyric.MSST_DIR/MSST_MODEL_PATHS itself.
+
+    process_song only runs via the CLI's main() in the reference flow, which
+    populates these before processing; the worker calls process_song
+    directly and skips main() entirely, so without this the globals stay
+    None and separate_song fails confusingly instead of via a clear startup error.
+    """
+
+    def test_lifespan_populates_msst_dir_and_models(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/sentinel/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/sentinel/models"))
+        monkeypatch.setattr(
+            delyric, "ensure_msst_models", lambda model_dir: {"sentinel": {"model_dir": model_dir}}
+        )
+        with TestClient(dw.app):
+            assert delyric.MSST_DIR == Path("/sentinel/msst")
+            assert delyric.MSST_MODEL_PATHS == {"sentinel": {"model_dir": Path("/sentinel/models")}}
+
+    def test_lifespan_fails_fast_when_msst_dir_missing(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+
+        def boom() -> Path:
+            raise RuntimeError("DELYRIC_MSST_DIR is not set")
+
+        monkeypatch.setattr(delyric, "resolve_msst_dir", boom)
+        with pytest.raises(RuntimeError, match="DELYRIC_MSST_DIR"):
+            with TestClient(dw.app):
+                pass
+
+    def test_lifespan_fails_fast_when_model_ensure_fails(
+        self, reset_state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import delyric
+        import delyric_worker as dw
+
+        monkeypatch.setattr(delyric, "verify_cuda", lambda: None)
+        monkeypatch.setattr(delyric, "resolve_msst_dir", lambda: Path("/sentinel/msst"))
+        monkeypatch.setattr(delyric, "resolve_model_dir", lambda: Path("/sentinel/models"))
+
+        def boom(_model_dir: Path) -> dict:
+            raise RuntimeError("sha256 mismatch")
+
+        monkeypatch.setattr(delyric, "ensure_msst_models", boom)
+        with pytest.raises(RuntimeError, match="sha256"):
+            with TestClient(dw.app):
+                pass
 
 
 class TestBindHostPrecheck:

@@ -12,7 +12,7 @@ USDB_USERNAME=your_username
 USDB_PASSWORD=your_password
 ```
 
-Vocal separation (delyric) deps are installed automatically on first `devenv shell` — audio-separator[gpu] is pip-installed into a venv (CUDA via pip wheels, no Nix CUDA rebuild).
+Vocal separation (delyric) deps are installed automatically on first `devenv shell` — `requirements.txt` (MSST inference deps: torch, librosa, …) is pip-installed into a venv (CUDA via pip wheels, no Nix CUDA rebuild), and a pinned ZFTurbo MSST checkout is fetched via Nix.
 
 ## Commands
 
@@ -91,7 +91,7 @@ just delyric --dry-run                # Preview what would be processed
 just delyric --force                  # Reprocess even if outputs exist
 ```
 
-Requires Python with `pip install audio-separator[gpu] click tqdm`. Runs on a GPU workstation (not part of the download pipeline). Produces `instrumental.webm` and `vocals.webm` alongside existing `audio.webm` in each song directory, and adds `#INSTRUMENTAL:` and `#VOCALS:` tags to `song.txt`.
+Requires Python with deps from `requirements.txt` and a pinned MSST checkout (see `nix/delyric-worker.nix`). Runs on a GPU workstation (not part of the download pipeline) — deployed as a worker on gnomon. Produces `instrumental.webm` and `vocals.webm` alongside existing `audio.webm` in each song directory, and adds `#INSTRUMENTAL:` and `#VOCALS:` tags to `song.txt`.
 
 ### Batch download from file
 Create a file with one song ID per line (# comments supported):
@@ -118,7 +118,7 @@ just fmt      # Auto-fix formatting
 - `usdb/` — USDB HTTP client: login, search, detail page parsing, txt download
 - `ytdlp/` — yt-dlp wrapper: parallel audio/video download with retry and proxy support
 - `archive/` — Download archive: tracks completed song IDs in `.downloaded.txt`
-- `delyric.py` — Vocal separation pipeline: ensemble AI separation using audio-separator (Mel-Band Roformer + HTDemucs_ft)
+- `delyric.py` — Vocal separation pipeline: MSST-based 3-model karaoke ensemble (anvuew + frazer/becruily BS-Roformer, gabox_v2 Mel-Band Roformer, avg_wave, TTA)
 
 ## Key design decisions
 
@@ -128,4 +128,4 @@ just fmt      # Auto-fix formatting
 - yt-dlp retries on transient errors (HTTP 429, network issues).
 - No YouTube search fallback — only downloads songs with explicit YouTube URLs in USDB comments to avoid wrong-video risk.
 - Download archive in output dir — `.downloaded.txt` with one song ID per line, checked before each download.
-- Vocal separation uses Mel-Band Roformer + HTDemucs_ft ensemble (~10.8 dB SDR) via audio-separator — best available quality for instrumental isolation. Outputs Opus/WebM at 128kbps to match source format. USDX `DefaultSingMode=Instrumental` makes instrumentals the default for all songs with `#INSTRUMENTAL:` tags.
+- Vocal separation uses a validated MSST 3-model karaoke ensemble (anvuew + frazer/becruily BS-Roformer + gabox_v2 Mel-Band Roformer, avg_wave, TTA), run via ZFTurbo's Music-Source-Separation-Training `inference.py`/`ensemble.py` CLIs as subprocesses — best available quality for instrumental isolation. Outputs Opus/WebM at 128kbps to match source format. USDX `DefaultSingMode=Instrumental` makes instrumentals the default for all songs with `#INSTRUMENTAL:` tags.

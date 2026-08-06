@@ -212,6 +212,17 @@ def bind_host_available(host: str) -> bool:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # process_song reads delyric.MSST_DIR/MSST_MODEL_PATHS as module globals;
+    # only the CLI's main() populates them before processing (delyric.py's
+    # main()), and the worker calls process_song directly without going
+    # through main(), so it must resolve them here itself — mirrors main()'s
+    # ordering (resolve the MSST checkout, ensure models, then verify_cuda)
+    # before any job is accepted.
+    delyric.MSST_DIR = delyric.resolve_msst_dir()
+    delyric.MSST_MODEL_PATHS = delyric.ensure_msst_models(delyric.resolve_model_dir())
+    # Fail fast under systemd rather than silently falling back to CPU (see
+    # delyric.verify_cuda's docstring for why that's dangerous on a queue).
+    delyric.verify_cuda()
     _start_worker()
     try:
         yield

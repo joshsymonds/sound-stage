@@ -7,12 +7,27 @@
   zlib,
   binutils,
   gnumake,
+  fetchFromGitHub,
 }: let
   nativeLibs = lib.makeLibraryPath [stdenv.cc.cc.lib zlib];
   # Build tools for pip's C-extension compilation (some transitive deps ship
   # only sdists — e.g. uvloop's bitpack.c). Without these, pip install loops
   # forever failing on "gcc: command not found" under the hardened unit PATH.
   buildToolsBin = lib.makeBinPath [stdenv.cc binutils gnumake];
+
+  # Pinned Music-Source-Separation-Training (MSST) checkout — provides the
+  # inference.py/ensemble.py CLIs the karaoke ensemble runs as subprocesses.
+  # Fetched at build time so the store path is immutable and needs no
+  # runtime bootstrap, unlike the pip venv below (which still installs
+  # lazily on first start). Bump the rev deliberately, not casually — the
+  # ensemble's model configs/checkpoints are validated against this exact
+  # commit.
+  msstSrc = fetchFromGitHub {
+    owner = "ZFTurbo";
+    repo = "Music-Source-Separation-Training";
+    rev = "ccf86c105f55a03e4df3b294e8d27613fef80c1f";
+    sha256 = "1f600gfhkfyhw313ianq4r99slpq7i6m98a32sbrq5mzng385rv9";
+  };
 in
   stdenv.mkDerivation {
     pname = "delyric-worker";
@@ -42,7 +57,8 @@ in
         --subst-var-by python        "${python3}/bin/python" \
         --subst-var-by ffmpegBin     "${ffmpeg}/bin" \
         --subst-var-by nativeLibs    "${nativeLibs}" \
-        --subst-var-by buildToolsBin "${buildToolsBin}"
+        --subst-var-by buildToolsBin "${buildToolsBin}" \
+        --subst-var-by msstDir       "${msstSrc}"
       chmod +x $out/bin/delyric-worker
 
       runHook postInstall

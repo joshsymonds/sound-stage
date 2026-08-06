@@ -54,6 +54,12 @@ type DownloadConfig struct {
 	// paths are translated to the Deck's view; empty sends server-local
 	// paths unchanged, which is only correct when the mounts coincide.
 	DeckLibraryDir string
+	// DelyricURL is the delyric worker's base URL (e.g. "http://172.31.0.98:9001").
+	// When set, finalizeDownload and queueAlreadyDownloaded best-effort POST
+	// /process so vocal separation starts automatically once a song lands.
+	// Empty skips the POST. Worker failures (unreachable, non-2xx) are logged
+	// but never affect the download or queue outcome.
+	DelyricURL string
 	// InvalidateLibrary is called after each successful download so a cached
 	// library snapshot (LibraryCache) re-scans on the next GET /api/songs.
 	// Optional — a nil hook is a no-op.
@@ -347,6 +353,12 @@ func finalizeDownload(
 	if dlConfig.InvalidateLibrary != nil {
 		dlConfig.InvalidateLibrary()
 	}
+	// Detached: a black-holed or offline worker must never delay the download
+	// outcome. ctx here already descends from runDownload's context.Background(),
+	// so no request-scoped cancellation is being escaped.
+	if dlConfig.DelyricURL != "" {
+		go notifyDelyric(ctx, dlConfig.HTTPClient, dlConfig.DelyricURL, filepath.Dir(txtPath), logger)
+	}
 	// With a configured Deck, /refresh must succeed before queueing — otherwise
 	// USDX doesn't know the song and the queue driver would 404 on stage.
 	if dlConfig.DeckURL != "" {
@@ -398,7 +410,21 @@ func queueAlreadyDownloaded(
 		return
 	}
 	dirName := usdb.SanitizePath(fmt.Sprintf("%s - %s", details.Artist, details.Title))
-	txtPath := filepath.Join(dlConfig.OutputDir, dirName, "song.txt")
+	songDir := filepath.Join(dlConfig.OutputDir, dirName)
+	// Catch-up: a song downloaded while the worker was offline never got its
+	// automatic /process POST. Re-request only fires it if separation hasn't
+	// happened yet — don't burn GPU time re-separating on every re-request.
+	// The POST itself is detached (context.Background()) so a black-holed
+	// worker can't delay this "already_downloaded" response, which the caller
+	// (DownloadHandler) is about to write synchronously.
+	if dlConfig.DelyricURL != "" {
+		if _, statErr := os.Stat(filepath.Join(songDir, "instrumental.webm")); os.IsNotExist(statErr) {
+			go func() { //nolint:contextcheck,gosec // intentional detach from request context (G118)
+				notifyDelyric(context.Background(), dlConfig.HTTPClient, dlConfig.DelyricURL, songDir, logger)
+			}()
+		}
+	}
+	txtPath := filepath.Join(songDir, "song.txt")
 	parsed, parseErr := txtparse.Parse(txtPath)
 	if parseErr != nil {
 		logger.WarnContext(ctx, "auto-queue: parse existing .txt failed",
@@ -482,4 +508,50 @@ func notifyDeck(parentCtx context.Context, client *http.Client, deckURL, txtPath
 	}
 	logger.DebugContext(ctx, "deck accepted /refresh", "path", txtPath)
 	return true
+}
+
+// notifyDelyric POSTs /process to the delyric worker so vocal separation
+// starts automatically for the newly-downloaded song. Best-effort: failures
+// (unset URL, unreachable worker, non-2xx) are logged but never affect the
+// download or queue outcome — separation is an enhancement, not a gate.
+// A nil client falls back to http.DefaultClient (test convenience, matching
+// notifyDeck).
+func notifyDelyric(parentCtx context.Context, client *http.Client, delyricURL, songDir string, logger *slog.Logger) {
+	if delyricURL == "" {
+		return
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	body, err := json.Marshal(map[string]string{"songPath": songDir})
+	if err != nil {
+		logger.WarnContext(parentCtx, "marshal delyric /process payload", "error", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(parentCtx, proxyTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, delyricURL+"/process", bytes.NewReader(body))
+	if err != nil {
+		logger.WarnContext(ctx, "build delyric /process request", "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.WarnContext(ctx, "delyric worker unreachable", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode/100 != 2 {
+		logger.WarnContext(ctx, "delyric /process returned non-2xx",
+			"status", resp.StatusCode,
+			"song_dir", songDir,
+		)
+		return
+	}
+	logger.DebugContext(ctx, "delyric worker accepted /process", "song_dir", songDir)
 }

@@ -93,6 +93,7 @@ func HandlerWithQueue(cfg Config, queue *Queue) http.Handler {
 		dl.InvalidateLibrary = libCache.Invalidate
 		dl.Queue = queue
 		dl.HTTPClient = deckProxy
+		dl.DelyricURL = cfg.DelyricURL
 		mux.Handle("POST /api/download", DownloadHandler(dl))
 	}
 
